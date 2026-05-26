@@ -1682,3 +1682,90 @@ end
     @test_nowarn println(summary_callback)
     @test_nowarn display(summary_callback)
 end
+
+@testitem "CellAverageFunctional" setup=[Setup, AdditionalImports] begin
+    using Meshes: Meshes, Box, Point
+    
+    # Test 1D case: [0, 1] subdivided into 3 intervals
+    @test begin
+        kernel = GaussKernel{1}(shape_parameter = 1.0)
+        
+        # Create 3 control volumes (cell-average functionals)
+        volumes = [
+            Box(Point(0.0), Point(1/3)),
+            Box(Point(1/3), Point(2/3)),
+            Box(Point(2/3), Point(1.0))
+        ]
+        
+        functionals = [CellAverageFunctional(v) for v in volumes]
+        
+        # Check that functionals are created correctly
+        @test length(functionals) == 3
+        @test functionals[1].volume_measure ≈ 1/3
+        @test functionals[2].volume_measure ≈ 1/3
+        @test functionals[3].volume_measure ≈ 1/3
+        
+        # Assemble the reconstruction matrix
+        A = assemble_cell_average_matrix(functionals, kernel)
+        
+        # Check matrix dimensions
+        @test size(A) == (3, 3)
+        
+        # Matrix should be symmetric (for radial kernels with symmetric functionals)
+        @test isapprox(A, A', atol=1e-10)
+        
+        # Diagonal entries should be positive
+        for i in 1:3
+            @test A[i, i] > 0
+        end
+        
+        true
+    end
+    
+    # Test 2D case: [0, 1] × [0, 1] subdivided into 4 squares
+    @test begin
+        kernel = GaussKernel{2}(shape_parameter = 1.0)
+        
+        # Create 4 control volumes (2×2 grid)
+        volumes = [
+            Box(Point(0.0, 0.0), Point(0.5, 0.5)),    # bottom-left
+            Box(Point(0.5, 0.0), Point(1.0, 0.5)),    # bottom-right
+            Box(Point(0.0, 0.5), Point(0.5, 1.0)),    # top-left
+            Box(Point(0.5, 0.5), Point(1.0, 1.0))     # top-right
+        ]
+        
+        functionals = [CellAverageFunctional(v) for v in volumes]
+        
+        # Check that functionals are created correctly
+        @test length(functionals) == 4
+        for i in 1:4
+            @test isapprox(functionals[i].volume_measure, 0.25, atol=1e-10)
+        end
+        
+        # Assemble the reconstruction matrix
+        A = assemble_cell_average_matrix(functionals, kernel)
+        
+        # Check matrix dimensions
+        @test size(A) == (4, 4)
+        
+        # Matrix should be symmetric
+        @test isapprox(A, A', atol=1e-10)
+        
+        # Diagonal entries should be positive
+        for i in 1:4
+            @test A[i, i] > 0
+        end
+        
+        # Diagonal entries should be larger than off-diagonal entries 
+        # (self-interaction > cross-interaction for Gaussian kernel)
+        for i in 1:4
+            for j in 1:4
+                if i != j
+                    @test A[i, i] > A[i, j]
+                end
+            end
+        end
+        
+        true
+    end
+end

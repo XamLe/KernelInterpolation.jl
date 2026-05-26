@@ -47,10 +47,12 @@ include("nodes.jl")
 include("basis.jl")
 include("regularization.jl")
 include("differential_operators.jl")
+include("cell_average_operators.jl")
 include("equations.jl")
 include("rbf_fd/rbf_fd.jl")
 include("kernel_matrices.jl")
 include("interpolation.jl")
+include("cell_average_interpolation.jl")
 include("discretization.jl")
 include("callbacks_step/callbacks_step.jl")
 include("visualization.jl")
@@ -70,6 +72,8 @@ export AbstractRBFFDLocalBasis, RBFFDStandardBasis, RBFFDLagrangeBasis
 export RBFFDBasis
 export phi, Phi, order, local_order
 export Identity, PartialDerivative, Gradient, Laplacian, EllipticOperator
+export CellAverageFunctional, assemble_cell_average_matrix
+export CellAverageInterpolation, cell_average_interpolate, cell_averages, functionals
 export PoissonEquation, EllipticEquation, AdvectionEquation, HeatEquation,
        AdvectionDiffusionEquation
 export SpatialDiscretization, Semidiscretization, semidiscretize
