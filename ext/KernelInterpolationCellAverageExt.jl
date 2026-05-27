@@ -2,6 +2,7 @@ module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric
 using Meshes: Meshes, Point, measure, integral, to, ustrip
+using RecipesBase: @recipe, @series
 
 if pkgversion(Meshes) < v"0.57"
     error("""
@@ -135,6 +136,164 @@ function KernelInterpolation.cell_averages(itp::KernelInterpolation.CellAverageI
         result[i] = ustrip(integral(integrand, func.volume)) / func.volume_measure
     end
     return result
+end
+
+# ── visualization helpers ────────────────────────────────────────────────────
+
+# Min/max corner coordinates of a box-shaped functional
+function _bounds(func::KernelInterpolation.CellAverageFunctional)
+    return _to_coords(func.volume.min), _to_coords(func.volume.max)
+end
+
+# Infer 1D domain from a vector of functionals
+function _domain_1d(funcs)
+    lo = minimum(_bounds(func)[1][1] for func in funcs)
+    hi = maximum(_bounds(func)[2][1] for func in funcs)
+    return lo, hi
+end
+
+# Infer 2D domain from a vector of functionals
+function _domain_2d(funcs)
+    lo_x = minimum(_bounds(func)[1][1] for func in funcs)
+    hi_x = maximum(_bounds(func)[2][1] for func in funcs)
+    lo_y = minimum(_bounds(func)[1][2] for func in funcs)
+    hi_y = maximum(_bounds(func)[2][2] for func in funcs)
+    return lo_x, hi_x, lo_y, hi_y
+end
+
+# NaN-separated (x, y) coordinates for a 1D step-function plot
+function _step_xy_1d(funcs, vals)
+    xs = Float64[]
+    ys = Float64[]
+    for (func, v) in zip(funcs, vals)
+        lo, hi = _bounds(func)
+        append!(xs, (lo[1], hi[1], NaN))
+        append!(ys, (v,    v,    NaN))
+    end
+    return xs, ys
+end
+
+# Rasterize 2D cell averages onto a fine (x, y) grid via point-in-cell test
+function _rasterize_2d(funcs, vals, x, y)
+    z = fill(NaN, length(y), length(x))
+    for (ix, xv) in enumerate(x), (iy, yv) in enumerate(y)
+        p = Point(xv, yv)
+        for (func, v) in zip(funcs, vals)
+            if p ∈ func.volume
+                z[iy, ix] = v
+                break
+            end
+        end
+    end
+    return z
+end
+
+# Cell averages recovered algebraically from A * c (exact, no quadrature)
+_algebraic_avg(itp) = KernelInterpolation.system_matrix(itp) *
+                      KernelInterpolation.coefficients(itp)
+
+# ── recipes ─────────────────────────────────────────────────────────────────
+
+# 1D: step function of cell averages + smooth interpolant
+@recipe function f(itp::KernelInterpolation.CellAverageInterpolation{1};
+                   x_min = nothing, x_max = nothing, N = 200)
+    funcs  = KernelInterpolation.functionals(itp)
+    lo, hi = _domain_1d(funcs)
+    lo     = @something(x_min, lo)
+    hi     = @something(x_max, hi)
+    x      = collect(LinRange(lo, hi, N))
+
+    @series begin
+        xs, ys    = _step_xy_1d(funcs, _algebraic_avg(itp))
+        label     --> "cell averages"
+        linestyle --> :dash
+        linewidth --> 2
+        xs, ys
+    end
+    @series begin
+        label  --> "interpolant s(x)"
+        xguide --> "x"
+        yguide --> "f"
+        x, itp.(x)
+    end
+end
+
+# 1D: target function + step function + smooth interpolant
+@recipe function f(itp::KernelInterpolation.CellAverageInterpolation{1},
+                   target::Function;
+                   x_min = nothing, x_max = nothing, N = 200)
+    funcs  = KernelInterpolation.functionals(itp)
+    lo, hi = _domain_1d(funcs)
+    lo     = @something(x_min, lo)
+    hi     = @something(x_max, hi)
+    x      = collect(LinRange(lo, hi, N))
+
+    @series begin
+        label --> "target f(x)"
+        x, target.(x)
+    end
+    @series begin
+        xs, ys    = _step_xy_1d(funcs, _algebraic_avg(itp))
+        label     --> "cell averages λᵢ(f)"
+        linestyle --> :dash
+        linewidth --> 2
+        xs, ys
+    end
+    @series begin
+        label  --> "interpolant s(x)"
+        xguide --> "x"
+        yguide --> "f"
+        x, itp.(x)
+    end
+end
+
+# 2D: smooth interpolant as heatmap
+@recipe function f(itp::KernelInterpolation.CellAverageInterpolation{2};
+                   x_min = nothing, x_max = nothing,
+                   y_min = nothing, y_max = nothing, N = 50)
+    funcs              = KernelInterpolation.functionals(itp)
+    lo_x, hi_x, lo_y, hi_y = _domain_2d(funcs)
+    lo_x = @something(x_min, lo_x); hi_x = @something(x_max, hi_x)
+    lo_y = @something(y_min, lo_y); hi_y = @something(y_max, hi_y)
+
+    x = collect(LinRange(lo_x, hi_x, N))
+    y = collect(LinRange(lo_y, hi_y, N))
+
+    seriestype --> :heatmap
+    xguide     --> "x"
+    yguide     --> "y"
+    x, y, [itp([xv, yv]) for yv in y, xv in x]
+end
+
+# 2D: piecewise-constant heatmap of cell averages + contour lines of interpolant
+@recipe function f(itp::KernelInterpolation.CellAverageInterpolation{2},
+                   target::Function;
+                   x_min = nothing, x_max = nothing,
+                   y_min = nothing, y_max = nothing, N = 50)
+    funcs              = KernelInterpolation.functionals(itp)
+    lo_x, hi_x, lo_y, hi_y = _domain_2d(funcs)
+    lo_x = @something(x_min, lo_x); hi_x = @something(x_max, hi_x)
+    lo_y = @something(y_min, lo_y); hi_y = @something(y_max, hi_y)
+
+    x = collect(LinRange(lo_x, hi_x, N))
+    y = collect(LinRange(lo_y, hi_y, N))
+
+    @series begin
+        z         = _rasterize_2d(funcs, _algebraic_avg(itp), x, y)
+        seriestype := :heatmap
+        xguide    --> "x"
+        yguide    --> "y"
+        label     --> "cell averages λᵢ(f)"
+        x, y, z
+    end
+    @series begin
+        z          = [itp([xv, yv]) for yv in y, xv in x]
+        seriestype := :contour
+        label      --> "interpolant s(x,y)"
+        colorbar   --> false
+        linewidth  --> 2
+        x, y, z
+    end
 end
 
 end
