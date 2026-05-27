@@ -1,7 +1,7 @@
 module KernelInterpolationCellAverageExt
 
-using LinearAlgebra: Symmetric
-using Meshes: Meshes, Point, measure, integral, to, ustrip
+using LinearAlgebra: Symmetric, norm
+using Meshes: Meshes, Point, measure, integral, to, ustrip, centroid
 using RecipesBase: @recipe, @series
 
 if pkgversion(Meshes) < v"0.57"
@@ -136,6 +136,18 @@ function KernelInterpolation.cell_averages(itp::KernelInterpolation.CellAverageI
         result[i] = ustrip(integral(integrand, func.volume)) / func.volume_measure
     end
     return result
+end
+
+function KernelInterpolation.mesh_diameter(functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
+    return maximum(functionals) do func
+        lo, hi = _to_coords(func.volume.min), _to_coords(func.volume.max)
+        norm(hi .- lo)
+    end
+end
+
+function KernelInterpolation.centroid_nodeset(functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
+    coords = [_to_coords(centroid(func.volume)) for func in functionals]
+    return KernelInterpolation.NodeSet(coords)
 end
 
 # ── visualization helpers ────────────────────────────────────────────────────

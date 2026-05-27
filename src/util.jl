@@ -42,6 +42,32 @@ end
 # Create `d` polyvars from `TypedPolynomials.jl`, don't use `@polyvars` because of
 # https://github.com/JuliaAlgebra/TypedPolynomials.jl/issues/51, instead use the
 # workaround from there
+"""
+    l2_error(itp, f, nodes)
+
+Compute the discrete L₂ error of `itp` against reference function `f` evaluated
+at `nodes` (any iterable of point vectors). Returns the RMS error, which approximates
+the continuous L₂ norm on the unit hypercube with uniform spacing.
+
+See also [`linf_error`](@ref).
+"""
+function l2_error(itp, f, nodes)
+    e = [itp(x) - f(x) for x in nodes]
+    return norm(e) / sqrt(length(e))
+end
+
+"""
+    linf_error(itp, f, nodes)
+
+Compute the discrete L₋∞ error of `itp` against reference function `f` evaluated
+at `nodes` (any iterable of point vectors).
+
+See also [`l2_error`](@ref).
+"""
+function linf_error(itp, f, nodes)
+    return maximum(abs(itp(x) - f(x)) for x in nodes)
+end
+
 polyvars(d) = ntuple(i -> Variable{Symbol("x[", i, "]")}(), d)
 # The function above is not type stable.
 # Therefore, we define some common special cases for performance reasons.

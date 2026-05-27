@@ -72,7 +72,7 @@ export AbstractRBFFDLocalBasis, RBFFDStandardBasis, RBFFDLagrangeBasis
 export RBFFDBasis
 export phi, Phi, order, local_order
 export Identity, PartialDerivative, Gradient, Laplacian, EllipticOperator
-export CellAverageFunctional, assemble_cell_average_matrix
+export CellAverageFunctional, assemble_cell_average_matrix, mesh_diameter, centroid_nodeset
 export CellAverageInterpolation, cell_average_interpolate, cell_averages, functionals
 export PoissonEquation, EllipticEquation, AdvectionEquation, HeatEquation,
        AdvectionDiffusionEquation
@@ -91,6 +91,7 @@ export Interpolation, TemporalInterpolation
 export MultiscaleInterpolation, multiscale_interpolate
 export AliveCallback, SaveSolutionCallback, SummaryCallback
 export vtk_save, vtk_read
+export l2_error, linf_error
 export examples_dir, get_examples, default_example
 
 end
