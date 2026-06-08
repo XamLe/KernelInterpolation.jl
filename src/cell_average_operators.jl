@@ -15,9 +15,14 @@ This functionality is provided by the KernelInterpolationMeshesExt extension and
 - `volume_measure::Float64`: The volume measure |V|
 """
 struct CellAverageFunctional{Dim}
-    volume::Any  # Geometry from Meshes.jl
+    volume::Any          # Geometry from Meshes.jl
     volume_measure::Float64
+    quadrature::Any      # nothing, or (nodes, weights) precomputed by the extension
 end
+
+# Convenience constructor for cases without quadrature
+CellAverageFunctional{Dim}(volume, measure::Float64) where {Dim} =
+    CellAverageFunctional{Dim}(volume, measure, nothing)
 
 function assemble_cell_average_matrix end
 
