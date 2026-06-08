@@ -1,8 +1,7 @@
 module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric, norm
-using StaticArrays: SVector
-using Meshes: Meshes, Box, Point, measure, to, ustrip
+using Meshes: Meshes, Box, Point, measure, to, ustrip, integral, centroid, boundingbox
 using RecipesBase: @recipe, @series
 
 if pkgversion(Meshes) < v"0.57"
@@ -19,67 +18,26 @@ function _to_coords(p::Point)
     return ustrip.(to(p))
 end
 
-# ── Quadrature: uniform midpoint rule on a Box ────────────────────────────────
-#
-# Covers Box with n^dim midpoints on a uniform grid.
-# Node at multi-index (i₁,…,i_d) (0-based): lo_d + (i_d + 0.5) * (hi_d - lo_d) / n.
-# All weights equal: vol / n^dim, so sum(weights) = vol.
-
-function _box_quadrature(volume::Box, n::Int)
-    dim     = Meshes.embeddim(volume)
-    lo      = _to_coords(volume.min)
-    hi      = _to_coords(volume.max)
-    vol     = ustrip(measure(volume))
-    n_pts   = n^dim
-    nodes   = Vector{SVector{dim, Float64}}(undef, n_pts)
-    # Equal weights: each node represents a sub-cell of volume vol/n_pts, so
-    # sum(weights) = vol and the weighted sum approximates the integral over the box.
-    weight  = vol / n_pts
-    k = 0
-    # Iterate over all d-dimensional multi-indices via a Cartesian product of 0:n-1
-    # ranges, producing the n^dim midpoints of the uniform sub-cell grid.
-    for idx in Iterators.product(ntuple(_ -> 0:n-1, dim)...)
-        k += 1
-        coords = ntuple(d -> lo[d] + (idx[d] + 0.5) * (hi[d] - lo[d]) / n, dim)
-        nodes[k] = SVector{dim, Float64}(coords...)
-    end
-    return nodes, fill(weight, n_pts)
-end
-
 # ── CellAverageFunctional constructor ─────────────────────────────────────────
 
-function KernelInterpolation.CellAverageFunctional(volume::Box; n_quadrature::Int = 10)
+# Works for any parametrized Meshes.jl geometry; measure() gives the exact volume.
+function KernelInterpolation.CellAverageFunctional(volume::Meshes.Geometry)
     vol_measure = ustrip(measure(volume))
-    quad        = _box_quadrature(volume, n_quadrature)
     return KernelInterpolation.CellAverageFunctional{Meshes.embeddim(volume)}(
-        volume, vol_measure, quad)
+        volume, vol_measure)
 end
 
 # ── Matrix assembly ───────────────────────────────────────────────────────────
 
-# Function barrier so Julia specialises on the concrete types of quad_i / quad_j,
-# eliminating the type instability that arises from quadrature::Any.
-function _quad_double_sum(quad_i, quad_j, mi, mj, kernel)
-    nodes_i, w_i = quad_i
-    nodes_j, w_j = quad_j
-    s = 0.0
-    @inbounds for k in eachindex(w_i)
-        xi = nodes_i[k]
-        wi = w_i[k]
-        for l in eachindex(w_j)
-            s += wi * w_j[l] * kernel(xi, nodes_j[l])
-        end
-    end
-    # Dividing by both measures converts the double integral ∬K dx dy into
-    # the cell-average inner product: λᵢ(λⱼ(K)) = (1/|Ωᵢ||Ωⱼ|) ∬ K(x,y) dx dy.
-    return s / (mi * mj)
-end
-
-# Approximates the (i,j) entry of the Gram matrix A_{ij} = λᵢ(ψⱼ),
-# where ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy is the j-th basis functional applied to the kernel.
-function _entry_quad(func_i, func_j, kernel)
-    _quad_double_sum(func_i.quadrature, func_j.quadrature,
-                     func_i.volume_measure, func_j.volume_measure, kernel)
+# Approximates A[i,j] = (1/|Ωᵢ||Ωⱼ|) ∫_{Ωᵢ} ∫_{Ωⱼ} K(x,y) dy dx via nested
+# h-adaptive integration. The inner integral is recomputed at every outer quadrature
+# point; this is correct for any geometry but slow for large N.
+# ustrip is required because Meshes.integral returns a Unitful quantity (m^d × f-units);
+# volume_measure is already stripped, so we must strip the integrals to get plain Float64.
+function _entry(func_i, func_j, kernel)
+    inner(p) = ustrip(integral(q -> kernel(_to_coords(p), _to_coords(q)), func_j.volume))
+    return ustrip(integral(p -> inner(p), func_i.volume)) /
+           (func_i.volume_measure * func_j.volume_measure)
 end
 
 function KernelInterpolation.assemble_cell_average_matrix(
@@ -87,11 +45,11 @@ function KernelInterpolation.assemble_cell_average_matrix(
         kernel::KernelInterpolation.AbstractKernel)
     n = length(functionals)
     A = Matrix{Float64}(undef, n, n)
-    # Full n×n loop rather than exploiting kernel symmetry to keep the code simple;
-    # symmetrisation is deferred to cell_average_interpolate via Symmetric(A).
+    # Exploit kernel symmetry K(x,y) = K(y,x): compute upper triangle only.
     for i in 1:n
-        for j in 1:n
-            A[i, j] = _entry_quad(functionals[i], functionals[j], kernel)
+        for j in i:n
+            A[i, j] = _entry(functionals[i], functionals[j], kernel)
+            A[j, i] = A[i, j]
         end
     end
     return A
@@ -105,9 +63,9 @@ function KernelInterpolation.cell_average_interpolate(
     n = length(functionals)
     @assert length(values) == n "number of values must match number of functionals"
     A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel)
-    # Wrap as Symmetric so that the linear solver can use a Cholesky factorisation
-    # rather than LU; the underlying kernel Gram matrix is symmetric positive definite
-    # by the reproducing kernel property.
+    # Wrap as Symmetric so the solver can use Cholesky; kernel Gram matrices are SPD.
+    # Independent adaptive evaluation of A[i,j] and A[j,i] may differ by ~quadrature
+    # tolerance — Symmetric picks the upper triangle as the authoritative value.
     A_sym = Symmetric(A)
     c     = KernelInterpolation.solve_linear_system(A_sym, Float64.(values), linsolve)
     return KernelInterpolation.CellAverageInterpolation(kernel, functionals, c, A_sym)
@@ -115,22 +73,12 @@ end
 
 # ── Interpolant evaluation ────────────────────────────────────────────────────
 
-# Approximates ∫_{Ωⱼ} K(x, y) dy for a fixed evaluation point x.
-function _quad_single_sum(quad, x, kernel)
-    nodes, w = quad
-    s = 0.0
-    @inbounds for k in eachindex(w)
-        s += w[k] * kernel(x, nodes[k])
-    end
-    return s
-end
-
-# Evaluates s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy
-# is the j-th basis function (the cell-average functional applied to the kernel row).
+# s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy.
 function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
-    s = zero(eltype(itp.c))
+    s = zero(Float64)
     for (j, func) in enumerate(itp.functionals)
-        s += itp.c[j] * _quad_single_sum(func.quadrature, x, itp.kernel) /
+        s += itp.c[j] *
+             ustrip(integral(q -> itp.kernel(x, _to_coords(q)), func.volume)) /
              func.volume_measure
     end
     return s
@@ -142,24 +90,21 @@ end
 
 # ── Cell-average recovery ─────────────────────────────────────────────────────
 
-function _quad_avg(quad, itp, volume_measure)
-    nodes, w = quad
-    s = 0.0
-    @inbounds for k in eachindex(w)
-        s += w[k] * itp(nodes[k])
-    end
-    return s / volume_measure
-end
+# A*c recovers the cell averages of s exactly (λᵢ(s) = (Ac)ᵢ by construction),
+# so no integration is needed here.
+_algebraic_avg(itp) = KernelInterpolation.system_matrix(itp) *
+                      KernelInterpolation.coefficients(itp)
 
 function KernelInterpolation.cell_averages(itp::KernelInterpolation.CellAverageInterpolation)
-    return [_quad_avg(func.quadrature, itp, func.volume_measure)
-            for func in itp.functionals]
+    return _algebraic_avg(itp)
 end
 
 # ── Geometry utilities ────────────────────────────────────────────────────────
 
+# Use the bounding box so _bounds works for any geometry, not just Box.
 function _bounds(func::KernelInterpolation.CellAverageFunctional)
-    return _to_coords(func.volume.min), _to_coords(func.volume.max)
+    bb = boundingbox(func.volume)
+    return _to_coords(bb.min), _to_coords(bb.max)
 end
 
 function KernelInterpolation.mesh_diameter(
@@ -172,8 +117,7 @@ end
 
 function KernelInterpolation.centroid_nodeset(
         functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
-    coords = [(_to_coords(func.volume.min) .+ _to_coords(func.volume.max)) ./ 2
-              for func in functionals]
+    coords = [_to_coords(centroid(func.volume)) for func in functionals]
     return KernelInterpolation.NodeSet(coords)
 end
 
@@ -206,7 +150,7 @@ end
 
 function _rasterize_2d(funcs, vals, x, y)
     z = fill(NaN, length(y), length(x))
-    # O(pixels × cells) point-in-box scan; acceptable for visualization grids (≤200²).
+    # O(pixels × cells) point-in-geometry scan; acceptable for visualization grids (≤200²).
     for (ix, xv) in enumerate(x), (iy, yv) in enumerate(y)
         p = Point(xv, yv)
         for (func, v) in zip(funcs, vals)
@@ -218,12 +162,6 @@ function _rasterize_2d(funcs, vals, x, y)
     end
     return z
 end
-
-# A*c recovers the cell averages of s: λᵢ(s) = Σⱼ cⱼ A_{ij} = (Ac)ᵢ.
-# By construction this equals the interpolation data, but recomputing via A*c avoids
-# a second quadrature pass and is used as the ground-truth in plot recipes.
-_algebraic_avg(itp) = KernelInterpolation.system_matrix(itp) *
-                      KernelInterpolation.coefficients(itp)
 
 # ── Plot recipes ──────────────────────────────────────────────────────────────
 

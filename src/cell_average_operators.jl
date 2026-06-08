@@ -6,23 +6,20 @@ A functional that computes the cell average of a function over a control volume.
 The functional is defined as:
     λ(f) = (1/|V|) ∫_V f(x) dx
 
-where V is a geometry from Meshes.jl and |V| is its volume measure.
+where V is any parametrized geometry from Meshes.jl and |V| is its volume measure.
+Integration is performed via `Meshes.integral` (h-adaptive cubature).
 
-This functionality is provided by the KernelInterpolationMeshesExt extension and requires Meshes.jl to be loaded.
+This functionality is provided by the KernelInterpolationCellAverageExt extension and
+requires Meshes.jl to be loaded.
 
 # Fields
-- `volume::Geometry`: The control volume (from Meshes.jl)
+- `volume::Any`: The control volume — any parametrized Meshes.jl geometry
 - `volume_measure::Float64`: The volume measure |V|
 """
 struct CellAverageFunctional{Dim}
-    volume::Any          # Geometry from Meshes.jl
+    volume::Any          # any parametrized Meshes.jl geometry
     volume_measure::Float64
-    quadrature::Any      # nothing, or (nodes, weights) precomputed by the extension
 end
-
-# Convenience constructor for cases without quadrature
-CellAverageFunctional{Dim}(volume, measure::Float64) where {Dim} =
-    CellAverageFunctional{Dim}(volume, measure, nothing)
 
 function assemble_cell_average_matrix end
 
