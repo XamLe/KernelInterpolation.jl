@@ -93,15 +93,17 @@ end
 
 # s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy.
 function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
-    s = zero(Float64)
-    for (j, func) in enumerate(itp.functionals)
-        s += itp.c[j] *
+    m = length(itp.functionals)
+    contributions = Vector{Float64}(undef, m)
+    Threads.@threads for j in 1:m
+        func = itp.functionals[j]
+        contributions[j] = itp.c[j] *
             ustrip(integral(q -> itp.kernel(x, _to_coords(q)), func.volume;
                             # ibackend = Backend.Quadrature(gausslegendre(10))
                             )) /
-             func.volume_measure
+            func.volume_measure
     end
-    return s
+    return sum(contributions)
 end
 
 function (itp::KernelInterpolation.CellAverageInterpolation{1})(x::Real)

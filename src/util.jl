@@ -43,17 +43,24 @@ end
 # https://github.com/JuliaAlgebra/TypedPolynomials.jl/issues/51, instead use the
 # workaround from there
 """
-    l2_error(itp, f, nodes)
+    l2_error(itp, f, nodes; domain_vol)
 
 Compute the discrete L₂ error of `itp` against reference function `f` evaluated
-at `nodes` (any iterable of point vectors). Returns the RMS error, which approximates
-the continuous L₂ norm on the unit hypercube with uniform spacing.
+at `nodes` (any iterable of point vectors). `domain_vol` is the measure of the
+integration domain; for a domain [a,b]^d pass `domain_vol = (b-a)^d`. With a
+uniform grid of N points the approximation is √(domain_vol/N) · ‖e‖₂.
+
+!!! warning "Uniform grid assumption"
+    This function assumes equal quadrature weight `domain_vol/N` per point.
+    For non-uniform node distributions (Chebyshev nodes, adaptive grids, random
+    scatter) the weights differ between points and this estimate will be biased.
+    In that case compute the error with explicit per-point weights instead.
 
 See also [`linf_error`](@ref).
 """
-function l2_error(itp, f, nodes)
+function l2_error(itp, f, nodes; domain_vol)
     e = [itp(x) - f(x) for x in nodes]
-    return norm(e) / sqrt(length(e))
+    return sqrt(domain_vol / length(e)) * norm(e)
 end
 
 """
@@ -66,6 +73,26 @@ See also [`l2_error`](@ref).
 """
 function linf_error(itp, f, nodes)
     return maximum(abs(itp(x) - f(x)) for x in nodes)
+end
+
+"""
+    l2_error(itp_vals, f_vals; domain_vol)
+
+Compute the discrete L₂ error from precomputed vectors of interpolant and reference values.
+`domain_vol` is the measure of the integration domain. See [`l2_error(itp, f, nodes)`](@ref)
+for the uniform-grid assumption and its limitations.
+"""
+function l2_error(itp_vals::AbstractVector, f_vals::AbstractVector; domain_vol)
+    return sqrt(domain_vol / length(itp_vals)) * norm(itp_vals .- f_vals)
+end
+
+"""
+    linf_error(itp_vals, f_vals)
+
+Compute the discrete L₋∞ error from precomputed vectors of interpolant and reference values.
+"""
+function linf_error(itp_vals::AbstractVector, f_vals::AbstractVector)
+    return maximum(abs, itp_vals .- f_vals)
 end
 
 polyvars(d) = ntuple(i -> Variable{Symbol("x[", i, "]")}(), d)
