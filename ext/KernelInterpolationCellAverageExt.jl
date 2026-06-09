@@ -53,18 +53,21 @@ function KernelInterpolation.assemble_cell_average_matrix(
     A = Matrix{Float64}(undef, n, n)
     n_entries = n * (n + 1) ÷ 2
     @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, upper triangle)"
-    t_start = time()
-    entries_done = 0
+    t_start       = time()
+    entries_done  = 0
+    last_reported = 0
     # Exploit kernel symmetry K(x,y) = K(y,x): compute upper triangle only.
     for i in 1:n
-        t_row = time()
         for j in i:n
             A[i, j] = _entry(functionals[i], functionals[j], kernel)
             A[j, i] = A[i, j]
         end
         entries_done += n - i + 1
-        pct = round(Int, 100 * entries_done / n_entries)
-        @info "  row $i/$n  ($pct%,  $(round(time() - t_row; digits = 1))s/row,  $(round(time() - t_start; digits = 1))s total)"
+        milestone = (floor(Int, 100 * entries_done / n_entries) ÷ 10) * 10
+        if milestone > last_reported
+            last_reported = milestone
+            @info "  $milestone%  ($(round(time() - t_start; digits = 1))s elapsed)"
+        end
     end
     @info "Matrix assembly complete  ($(round(time() - t_start; digits = 1))s)"
     return A
