@@ -3,6 +3,8 @@ module KernelInterpolationCellAverageExt
 using LinearAlgebra: Symmetric, norm
 using Meshes: Meshes, Box, Point, measure, to, ustrip, integral, centroid, boundingbox
 using RecipesBase: @recipe, @series
+using FastGaussQuadrature
+using IntegrationInterface
 
 if pkgversion(Meshes) < v"0.57"
     error("""
@@ -35,8 +37,12 @@ end
 # ustrip is required because Meshes.integral returns a Unitful quantity (m^d × f-units);
 # volume_measure is already stripped, so we must strip the integrals to get plain Float64.
 function _entry(func_i, func_j, kernel)
-    inner(p) = ustrip(integral(q -> kernel(_to_coords(p), _to_coords(q)), func_j.volume))
-    return ustrip(integral(p -> inner(p), func_i.volume)) /
+    inner(p) = ustrip(integral(q -> kernel(_to_coords(p), _to_coords(q)), func_j.volume;
+                               # ibackend = Backend.Quadrature(gausslegendre(10))
+                               ))
+    return ustrip(integral(p -> inner(p), func_i.volume;
+                           # ibackend = Backend.Quadrature(gausslegendre(10))
+                                                         )) /
            (func_i.volume_measure * func_j.volume_measure)
 end
 
@@ -87,7 +93,9 @@ function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
     s = zero(Float64)
     for (j, func) in enumerate(itp.functionals)
         s += itp.c[j] *
-             ustrip(integral(q -> itp.kernel(x, _to_coords(q)), func.volume)) /
+            ustrip(integral(q -> itp.kernel(x, _to_coords(q)), func.volume;
+                            # ibackend = Backend.Quadrature(gausslegendre(10))
+                            )) /
              func.volume_measure
     end
     return s

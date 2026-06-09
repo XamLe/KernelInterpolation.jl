@@ -23,11 +23,13 @@ TypedPolynomials = "afbbf031-7a57-5f58-a1b9-b774a0fad08d"
 WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [weakdeps]
+FastGaussQuadrature = "442a2c76-b920-505d-bb47-c5924d526838"
 Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
+IntegrationInterface = "03ca86a4-b7cd-4b10-a38f-d7a84f40de1e"
 
 [extensions]
+KernelInterpolationCellAverageExt = ["Meshes", "FastGaussQuadrature", "IntegrationInterface"]
 KernelInterpolationMeshesExt = "Meshes"
-KernelInterpolationCellAverageExt = "Meshes"
 
 [compat]
 DiffEqCallbacks = "4"
