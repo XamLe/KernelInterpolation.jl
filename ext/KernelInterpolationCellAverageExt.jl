@@ -1,7 +1,9 @@
 module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric, norm
-using Meshes: Meshes, Box, Point, measure, to, ustrip, integral, centroid, boundingbox
+using Meshes: Meshes, Box, Point, Triangle, measure, to, ustrip, integral, centroid,
+              boundingbox, RegularGrid, elements, nelements, element,
+              tesselate, DelaunayTesselation, VoronoiTesselation, PointSet
 using RecipesBase: @recipe, @series
 using FastGaussQuadrature
 using IntegrationInterface
@@ -101,6 +103,13 @@ function (itp::KernelInterpolation.CellAverageInterpolation{1})(x::Real)
     return itp([x])
 end
 
+# ── CellAverageFunctional evaluation ─────────────────────────────────────────
+
+# λ(f) = (1/|V|) ∫_V f(x) dx  where x is a plain SVector{Dim,Float64}.
+function (func::KernelInterpolation.CellAverageFunctional)(f)
+    return ustrip(integral(p -> f(_to_coords(p)), func.volume)) / func.volume_measure
+end
+
 # ── Cell-average recovery ─────────────────────────────────────────────────────
 
 # A*c recovers the cell averages of s exactly (λᵢ(s) = (Ac)ᵢ by construction),
@@ -132,6 +141,97 @@ function KernelInterpolation.centroid_nodeset(
         functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
     coords = [_to_coords(centroid(func.volume)) for func in functionals]
     return KernelInterpolation.NodeSet(coords)
+end
+
+# ── Fill distance ─────────────────────────────────────────────────────────────
+
+@doc raw"""
+    fill_distance(nodeset, domain::Meshes.Geometry; n_ref = 2000)
+
+Approximate the fill distance
+```math
+    h_{X,\Omega} = \sup_{x \in \Omega} \min_{x_j \in X} \|x - x_j\|_2
+```
+by sampling `domain` with `n_ref` points drawn from
+`Meshes.HomogeneousSampling` and forwarding to the two-argument
+[`fill_distance(nodeset, reference)`](@ref).
+
+!!! warning "Stochastic result"
+    The reference points are drawn randomly. Different calls with the same
+    arguments may return slightly different values. For reproducible results
+    either call `Random.seed!` before this function, or build a deterministic
+    reference [`NodeSet`](@ref) manually and use the two-argument form.
+
+See also [`separation_distance`](@ref).
+"""
+# function KernelInterpolation.fill_distance(nodeset::KernelInterpolation.NodeSet,
+#                                            domain::Meshes.Geometry;
+#                                            n_ref::Int = 2000)
+#     @warn "fill_distance: reference points are drawn randomly via HomogeneousSampling($n_ref). " *
+#           "The result is stochastic — repeated calls may differ slightly. " *
+#           "Call `Random.seed!` beforehand or pass a pre-built reference NodeSet " *
+#           "to the two-argument form for reproducible results." maxlog=1
+#     ref_pts   = sample(domain, HomogeneousSampling(n_ref))
+#     reference = KernelInterpolation.NodeSet([_to_coords(p) for p in ref_pts])
+#     return KernelInterpolation.fill_distance(nodeset, reference)
+# end
+
+# ── Cell geometry constructors ────────────────────────────────────────────────
+
+# Return N^dim non-overlapping boxes from a uniform RegularGrid on [a,b]^dim.
+function KernelInterpolation.regular_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1)
+    lo   = ntuple(_ -> Float64(a), dim)
+    hi   = ntuple(_ -> Float64(b), dim)
+    dims = ntuple(_ -> N, dim)
+    return collect(elements(RegularGrid(lo, hi; dims)))
+end
+
+# Return N^dim + (N-1)^dim boxes: a primary RegularGrid plus a half-cell-shifted copy.
+# The staggered layout places centroid nodes between primary cells, which improves kernel
+# matrix conditioning compared to a single uniform grid of the same total density.
+function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1)
+    lo   = ntuple(_ -> Float64(a), dim)
+    hi   = ntuple(_ -> Float64(b), dim)
+    dims = ntuple(_ -> N, dim)
+    primary  = collect(elements(RegularGrid(lo, hi; dims)))
+    h        = (Float64(b) - Float64(a)) / N
+    lo_shift = ntuple(_ -> Float64(a) + h / 2, dim)
+    hi_shift = ntuple(_ -> Float64(b) - h / 2, dim)
+    dims_s   = ntuple(_ -> N - 1, dim)
+    secondary = collect(elements(RegularGrid(lo_shift, hi_shift; dims = dims_s)))
+    return vcat(primary, secondary)
+end
+
+# Partition [a,b]² into 2N² right triangles by splitting each square cell along its
+# lower-left to upper-right diagonal. Returned as a Vector{Triangle}.
+function KernelInterpolation.triangular_cells(N::Int; a = 0.0, b = 1.0)
+    h    = (Float64(b) - Float64(a)) / N
+    tris = Vector{Triangle}(undef, 2 * N^2)
+    k    = 0
+    for j in 0:(N - 1), i in 0:(N - 1)
+        p00 = Point(a + i * h,       a + j * h)
+        p10 = Point(a + (i + 1) * h, a + j * h)
+        p01 = Point(a + i * h,       a + (j + 1) * h)
+        p11 = Point(a + (i + 1) * h, a + (j + 1) * h)
+        tris[k += 1] = Triangle(p00, p10, p01)   # lower-left triangle (CCW)
+        tris[k += 1] = Triangle(p10, p11, p01)   # upper-right triangle (CCW)
+    end
+    return tris
+end
+
+# Tessellate a point set and return the mesh cells as a plain Vector of geometries.
+# Accepts a Meshes.PointSet, a KernelInterpolation.NodeSet, or any iterable of
+# Meshes.Point / AbstractVector coordinates. Pass method = DelaunayTesselation() or
+# VoronoiTesselation(); the result is a Vector{Triangle} or Vector{Ngon} respectively.
+function KernelInterpolation.tessellation_cells(points, method)
+    if points isa PointSet
+        pset = points
+    else
+        pts_vec = [p isa Point ? p : Point(Float64.(p)...) for p in points]
+        pset    = PointSet(pts_vec)
+    end
+    mesh = tesselate(pset, method)
+    return [element(mesh, i) for i in 1:nelements(mesh)]
 end
 
 # ── Visualization helpers ─────────────────────────────────────────────────────
