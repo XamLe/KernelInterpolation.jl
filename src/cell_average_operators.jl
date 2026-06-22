@@ -24,12 +24,19 @@ end
 function assemble_cell_average_matrix end
 
 """
-    mesh_diameter(functionals)
+    centroid_enclosing_radius(geometry)
 
-Return the mesh diameter: the maximum cell diameter (length of the longest diagonal)
-over all [`CellAverageFunctional`](@ref)s. Requires Meshes.jl.
+Return the radius of the smallest ball centered at the centroid of `geometry` that
+contains it, i.e. the maximum distance from the centroid to any vertex:
+```math
+    r(V) = \\max_{v \\in \\mathrm{vertices}(V)} \\|v - \\mathrm{centroid}(V)\\|.
+```
+Requires `Meshes.jl`. Works for any geometry with `centroid` and `vertices` defined
+(e.g. `Polytope`, `Segment`). A vector of geometries returns the maximum radius.
+
+See also [`maximum_cell_diameter`](@ref).
 """
-function mesh_diameter end
+function centroid_enclosing_radius end
 
 """
     centroid_nodeset(functionals)
@@ -37,6 +44,6 @@ function mesh_diameter end
 Return a [`NodeSet`](@ref) containing the centroids of all control volumes in
 `functionals`. Requires Meshes.jl.
 
-See also [`separation_distance`](@ref), [`mesh_diameter`](@ref).
+See also [`separation_distance`](@ref), [`maximum_cell_diameter`](@ref).
 """
 function centroid_nodeset end

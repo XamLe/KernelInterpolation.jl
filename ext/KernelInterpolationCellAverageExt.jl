@@ -1,8 +1,8 @@
 module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric, norm
-using Meshes: Meshes, Box, Point, Triangle, measure, to, ustrip, integral, centroid,
-              boundingbox, RegularGrid, elements, nelements, element,
+using Meshes: Meshes, Box, Point, Triangle, Polytope, measure, to, ustrip, integral,
+              centroid, vertices, boundingbox, RegularGrid, elements, nelements, element,
               tesselate, DelaunayTesselation, VoronoiTesselation, PointSet
 using RecipesBase: @recipe, @series
 using FastGaussQuadrature
@@ -123,18 +123,13 @@ end
 
 # ── Geometry utilities ────────────────────────────────────────────────────────
 
-# Use the bounding box so _bounds works for any geometry, not just Box.
-function _bounds(func::KernelInterpolation.CellAverageFunctional)
-    bb = boundingbox(func.volume)
-    return _to_coords(bb.min), _to_coords(bb.max)
+function KernelInterpolation.centroid_enclosing_radius(geom::Meshes.Geometry)
+    c = centroid(geom)
+    return ustrip.(maximum(norm(v - c) for v in vertices(geom)))
 end
 
-function KernelInterpolation.mesh_diameter(
-        functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
-    return maximum(functionals) do func
-        lo, hi = _bounds(func)
-        norm(hi .- lo)
-    end
+function KernelInterpolation.centroid_enclosing_radius(geoms::AbstractVector{<:Meshes.Geometry})
+    return ustrip.(maximum(KernelInterpolation.centroid_enclosing_radius, geoms))
 end
 
 function KernelInterpolation.centroid_nodeset(
@@ -164,17 +159,17 @@ by sampling `domain` with `n_ref` points drawn from
 
 See also [`separation_distance`](@ref).
 """
-# function KernelInterpolation.fill_distance(nodeset::KernelInterpolation.NodeSet,
-#                                            domain::Meshes.Geometry;
-#                                            n_ref::Int = 2000)
-#     @warn "fill_distance: reference points are drawn randomly via HomogeneousSampling($n_ref). " *
-#           "The result is stochastic — repeated calls may differ slightly. " *
-#           "Call `Random.seed!` beforehand or pass a pre-built reference NodeSet " *
-#           "to the two-argument form for reproducible results." maxlog=1
-#     ref_pts   = sample(domain, HomogeneousSampling(n_ref))
-#     reference = KernelInterpolation.NodeSet([_to_coords(p) for p in ref_pts])
-#     return KernelInterpolation.fill_distance(nodeset, reference)
-# end
+function KernelInterpolation.fill_distance(nodeset::KernelInterpolation.NodeSet,
+                                           domain::Meshes.Geometry;
+                                           n_ref::Int = 2000)
+    @warn "fill_distance: reference points are drawn randomly via HomogeneousSampling($n_ref). " *
+          "The result is stochastic — repeated calls may differ slightly. " *
+          "Call `Random.seed!` beforehand or pass a pre-built reference NodeSet " *
+          "to the two-argument form for reproducible results." maxlog=1
+    ref_pts   = Meshes.sample(domain, Meshes.HomogeneousSampling(n_ref))
+    reference = KernelInterpolation.NodeSet([_to_coords(p) for p in ref_pts])
+    return KernelInterpolation.fill_distance(nodeset, reference)
+end
 
 # ── Cell geometry constructors ────────────────────────────────────────────────
 

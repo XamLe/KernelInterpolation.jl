@@ -72,7 +72,7 @@ export AbstractRBFFDLocalBasis, RBFFDStandardBasis, RBFFDLagrangeBasis
 export RBFFDBasis
 export phi, Phi, order, local_order
 export Identity, PartialDerivative, Gradient, Laplacian, EllipticOperator
-export CellAverageFunctional, assemble_cell_average_matrix, mesh_diameter, centroid_nodeset
+export CellAverageFunctional, assemble_cell_average_matrix, centroid_enclosing_radius, centroid_nodeset
 export CellAverageInterpolation, cell_average_interpolate, cell_averages, functionals
 export regular_cells, overlapping_cells, triangular_cells, tessellation_cells
 export PoissonEquation, EllipticEquation, AdvectionEquation, HeatEquation,
