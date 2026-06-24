@@ -1,6 +1,6 @@
 module KernelInterpolationCellAverageExt
 
-using LinearAlgebra: Symmetric, norm
+using LinearAlgebra: Symmetric, norm, cond
 using Meshes: Meshes, Box, Point, Triangle, Polytope, measure, to, ustrip, integral,
               centroid, vertices, boundingbox, RegularGrid, elements, nelements, element,
               tesselate, DelaunayTesselation, VoronoiTesselation, PointSet
@@ -62,7 +62,8 @@ function KernelInterpolation.assemble_cell_average_matrix(
             A[j, i] = A[i, j]
         end
     end
-    @info "Matrix assembly complete  ($(round(t; digits = 1))s)"
+    κ = cond(A)
+    @info "Matrix assembly complete  ($(round(t; digits = 1))s)  cond(A) = $(round(κ; sigdigits = 4))"
     return A
 end
 
