@@ -50,36 +50,50 @@ end
 
 function KernelInterpolation.assemble_cell_average_matrix(
         functionals::Vector{<:KernelInterpolation.CellAverageFunctional},
-        kernel::KernelInterpolation.AbstractKernel)
-    n = length(functionals)
-    A = Matrix{Float64}(undef, n, n)
+        kernel::KernelInterpolation.AbstractKernel,
+        RealT::Type{<:Real} = Float64)
+    n         = length(functionals)
+    A         = Matrix{RealT}(undef, n, n)
     n_entries = n * (n + 1) ÷ 2
-    @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, upper triangle, $(Threads.nthreads()) thread(s))"
+    # BigFloat uses MPFR task-local state; sequential loop avoids pool contention.
+    use_threads = !(RealT <: BigFloat)
+    @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, upper triangle, $(use_threads ? Threads.nthreads() : 1) thread(s), RealT=$RealT)"
     # Exploit kernel symmetry K(x,y) = K(y,x): compute upper triangle only.
-    t = @elapsed Threads.@threads for i in 1:n
-        for j in i:n
-            A[i, j] = _entry(functionals[i], functionals[j], kernel)
-            A[j, i] = A[i, j]
+    t = @elapsed if use_threads
+        Threads.@threads for i in 1:n
+            for j in i:n
+                A[i, j] = RealT(_entry(functionals[i], functionals[j], kernel))
+                A[j, i] = A[i, j]
+            end
+        end
+    else
+        for i in 1:n
+            for j in i:n
+                A[i, j] = RealT(_entry(functionals[i], functionals[j], kernel))
+                A[j, i] = A[i, j]
+            end
         end
     end
-    κ = cond(A)
-    @info "Matrix assembly complete  ($(round(t; digits = 1))s)  cond(A) = $(round(κ; sigdigits = 4))"
+    # For BigFloat, computing cond via SVD in BigFloat is O(n³) at high precision;
+    # a Float64 estimate is fast and sufficient for logging.
+    κ = cond(RealT <: BigFloat ? Float64.(A) : A)
+    @info "Matrix assembly complete  ($(round(t; digits = 1))s)  cond(A) ≈ $(round(κ; sigdigits = 4))"
     return A
 end
 
 function KernelInterpolation.cell_average_interpolate(
         functionals::Vector{<:KernelInterpolation.CellAverageFunctional},
-        values::AbstractVector{<:Real},
+        values::AbstractVector{RealT},
         kernel::KernelInterpolation.AbstractKernel;
-        linsolve = nothing)
+        linsolve = nothing) where {RealT <: Real}
     n = length(functionals)
     @assert length(values) == n "number of values must match number of functionals"
-    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel)
+    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel, RealT)
     # Wrap as Symmetric so the solver can use Cholesky; kernel Gram matrices are SPD.
     # Independent adaptive evaluation of A[i,j] and A[j,i] may differ by ~quadrature
     # tolerance — Symmetric picks the upper triangle as the authoritative value.
     A_sym = Symmetric(A)
-    c     = KernelInterpolation.solve_linear_system(A_sym, Float64.(values), linsolve)
+    c     = KernelInterpolation.solve_linear_system(A_sym, RealT.(values), linsolve)
     return KernelInterpolation.CellAverageInterpolation(kernel, functionals, c, A_sym)
 end
 
@@ -88,7 +102,7 @@ end
 # s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy.
 function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
     m = length(itp.functionals)
-    contributions = Vector{Float64}(undef, m)
+    contributions = Vector{eltype(itp.c)}(undef, m)
     Threads.@threads for j in 1:m
         func = itp.functionals[j]
         contributions[j] = itp.c[j] *

@@ -21,6 +21,21 @@ struct CellAverageFunctional{Dim}
     volume_measure::Float64
 end
 
+"""
+    assemble_cell_average_matrix(functionals, kernel, RealT = Float64)
+
+Assemble the kernel Gram matrix for cell-average interpolation. Entry ``(i,j)`` is
+
+```math
+    A_{ij} = \\frac{1}{|V_i||V_j|}\\int_{V_i}\\int_{V_j} K(x,y)\\,\\mathrm{d}y\\,\\mathrm{d}x.
+```
+
+`RealT` controls the element type of the returned matrix; pass `BigFloat` (after calling
+`setprecision(BigFloat, bits)`) to perform the linear solve in higher precision.
+Requires Meshes.jl.
+
+See also [`cell_average_interpolate`](@ref).
+"""
 function assemble_cell_average_matrix end
 
 """
