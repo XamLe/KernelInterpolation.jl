@@ -14,15 +14,18 @@ requires Meshes.jl to be loaded.
 
 # Fields
 - `volume::Any`: The control volume — any parametrized Meshes.jl geometry
-- `volume_measure::Float64`: The volume measure |V|
+- `volume_measure::RealT`: The volume measure |V| in the same precision as the geometry
+
+The type parameter `RealT` is determined by the geometry's coordinate type (e.g. `Float64`
+or `BigFloat`) and controls the floating-point precision used throughout quadrature.
 """
-struct CellAverageFunctional{Dim}
+struct CellAverageFunctional{Dim, RealT <: Real}
     volume::Any          # any parametrized Meshes.jl geometry
-    volume_measure::Float64
+    volume_measure::RealT
 end
 
 """
-    assemble_cell_average_matrix(functionals, kernel, RealT = Float64)
+    assemble_cell_average_matrix(functionals, kernel)
 
 Assemble the kernel Gram matrix for cell-average interpolation. Entry ``(i,j)`` is
 
@@ -30,8 +33,11 @@ Assemble the kernel Gram matrix for cell-average interpolation. Entry ``(i,j)`` 
     A_{ij} = \\frac{1}{|V_i||V_j|}\\int_{V_i}\\int_{V_j} K(x,y)\\,\\mathrm{d}y\\,\\mathrm{d}x.
 ```
 
-`RealT` controls the element type of the returned matrix; pass `BigFloat` (after calling
-`setprecision(BigFloat, bits)`) to perform the linear solve in higher precision.
+The element type `RealT` of the returned matrix is inferred from the `RealT` parameter of
+the `CellAverageFunctional`s, which is determined by the coordinate type of the underlying
+geometry. Construct the functionals with BigFloat geometry (via `regular_cells(...; RealT=BigFloat)`)
+and call `setprecision(BigFloat, bits)` beforehand to perform assembly and solve in higher
+precision.
 Requires Meshes.jl.
 
 See also [`cell_average_interpolate`](@ref).

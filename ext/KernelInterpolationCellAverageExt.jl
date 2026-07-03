@@ -3,7 +3,7 @@ module KernelInterpolationCellAverageExt
 using LinearAlgebra: Symmetric, norm, cond
 using Meshes: Meshes, Box, Point, Triangle, Polytope, measure, to, ustrip, integral,
               centroid, vertices, boundingbox, RegularGrid, elements, nelements, element,
-              tesselate, DelaunayTesselation, VoronoiTesselation, PointSet
+              tesselate, DelaunayTesselation, VoronoiTesselation, PointSet, RowMaximum
 using RecipesBase: @recipe, @series
 using FastGaussQuadrature
 using IntegrationInterface
@@ -19,39 +19,37 @@ using KernelInterpolation: KernelInterpolation
 
 # Meshes stores coordinates as Unitful quantities; strip units to get plain Float64 SVectors.
 function _to_coords(p::Point)
-    return ustrip.(to(p))
+    return Meshes.ustrip.(Meshes.to(p))
 end
 
 # ── CellAverageFunctional constructor ─────────────────────────────────────────
 
-# Works for any parametrized Meshes.jl geometry; measure() gives the exact volume.
+# RealT is inferred from the geometry's coordinate type via typeof(ustrip(measure(volume))).
+# For Float64 geometry this gives Float64; for BigFloat geometry it gives BigFloat.
 function KernelInterpolation.CellAverageFunctional(volume::Meshes.Geometry)
     vol_measure = ustrip(measure(volume))
-    return KernelInterpolation.CellAverageFunctional{Meshes.embeddim(volume)}(
+    RealT = typeof(vol_measure)
+    return KernelInterpolation.CellAverageFunctional{Meshes.embeddim(volume), RealT}(
         volume, vol_measure)
 end
 
 # ── Matrix assembly ───────────────────────────────────────────────────────────
 
 # Approximates A[i,j] = (1/|Ωᵢ||Ωⱼ|) ∫_{Ωᵢ} ∫_{Ωⱼ} K(x,y) dy dx via nested
-# h-adaptive integration. The inner integral is recomputed at every outer quadrature
-# point; this is correct for any geometry but slow for large N.
-# ustrip is required because Meshes.integral returns a Unitful quantity (m^d × f-units);
-# volume_measure is already stripped, so we must strip the integrals to get plain Float64.
-function _entry(func_i, func_j, kernel)
-    inner(p) = ustrip(integral(q -> kernel(_to_coords(p), _to_coords(q)), func_j.volume;
-                               # ibackend = Backend.Quadrature(gausslegendre(10))
-                               ))
-    return ustrip(integral(p -> inner(p), func_i.volume;
-                           # ibackend = Backend.Quadrature(gausslegendre(10))
-                                                         )) /
+# h-adaptive integration. RealT is inferred from the functionals' type parameter so the
+# entire pipeline (quadrature nodes, weights, kernel evaluations, accumulation) runs in
+# that precision.
+function _entry(func_i::KernelInterpolation.CellAverageFunctional,
+                func_j::KernelInterpolation.CellAverageFunctional,
+                kernel)
+    inner(p) = ustrip(integral(q -> kernel(_to_coords(p), _to_coords(q)), func_j.volume))
+    return ustrip(integral(p -> inner(p), func_i.volume)) /
            (func_i.volume_measure * func_j.volume_measure)
 end
 
 function KernelInterpolation.assemble_cell_average_matrix(
-        functionals::Vector{<:KernelInterpolation.CellAverageFunctional},
-        kernel::KernelInterpolation.AbstractKernel,
-        RealT::Type{<:Real} = Float64)
+        functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
+        kernel::KernelInterpolation.AbstractKernel) where {Dim, RealT}
     n         = length(functionals)
     A         = Matrix{RealT}(undef, n, n)
     n_entries = n * (n + 1) ÷ 2
@@ -62,54 +60,54 @@ function KernelInterpolation.assemble_cell_average_matrix(
     t = @elapsed if use_threads
         Threads.@threads for i in 1:n
             for j in i:n
-                A[i, j] = RealT(_entry(functionals[i], functionals[j], kernel))
+                A[i, j] = _entry(functionals[i], functionals[j], kernel)
                 A[j, i] = A[i, j]
             end
         end
     else
         for i in 1:n
             for j in i:n
-                A[i, j] = RealT(_entry(functionals[i], functionals[j], kernel))
+                A[i, j] = _entry(functionals[i], functionals[j], kernel)
                 A[j, i] = A[i, j]
             end
         end
     end
-    # For BigFloat, computing cond via SVD in BigFloat is O(n³) at high precision;
-    # a Float64 estimate is fast and sufficient for logging.
-    κ = cond(RealT <: BigFloat ? Float64.(A) : A)
+    κ = cond(Float64.(A))
     @info "Matrix assembly complete  ($(round(t; digits = 1))s)  cond(A) ≈ $(round(κ; sigdigits = 4))"
     return A
 end
 
 function KernelInterpolation.cell_average_interpolate(
-        functionals::Vector{<:KernelInterpolation.CellAverageFunctional},
-        values::AbstractVector{RealT},
-        kernel::KernelInterpolation.AbstractKernel;
-        linsolve = nothing) where {RealT <: Real}
+    functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
+    values::AbstractVector,
+    kernel::KernelInterpolation.AbstractKernel;
+    linsolve = nothing) where {Dim, RealT}
     n = length(functionals)
     @assert length(values) == n "number of values must match number of functionals"
-    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel, RealT)
-    # Wrap as Symmetric so the solver can use Cholesky; kernel Gram matrices are SPD.
-    # Independent adaptive evaluation of A[i,j] and A[j,i] may differ by ~quadrature
-    # tolerance — Symmetric picks the upper triangle as the authoritative value.
+    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel)
+    # Wrap as Symmetric; kernel Gram matrices are SPD. Symmetric picks the upper triangle
+    # as authoritative when independent adaptive evaluations of A[i,j]/A[j,i] differ.
     A_sym = Symmetric(A)
-    c     = KernelInterpolation.solve_linear_system(A_sym, RealT.(values), linsolve)
-    return KernelInterpolation.CellAverageInterpolation(kernel, functionals, c, A_sym)
+    t_solve = @elapsed c = KernelInterpolation.solve_linear_system(A_sym, RealT.(values), linsolve)
+    @info "Linear solve complete  ($(round(t_solve; digits = 3))s)"
+    return KernelInterpolation.CellAverageInterpolation(kernel, collect(functionals), c, A_sym)
 end
 
 # ── Interpolant evaluation ────────────────────────────────────────────────────
 
 # s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy.
 function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
-    m = length(itp.functionals)
-    contributions = Vector{eltype(itp.c)}(undef, m)
-    Threads.@threads for j in 1:m
-        func = itp.functionals[j]
-        contributions[j] = itp.c[j] *
-            ustrip(integral(q -> itp.kernel(x, _to_coords(q)), func.volume;
-                            # ibackend = Backend.Quadrature(gausslegendre(10))
-                            )) /
-            func.volume_measure
+    use_threads = !(eltype(itp.c) <: BigFloat)
+    contribution(j) = itp.c[j] *
+        ustrip(integral(q -> itp.kernel(x, _to_coords(q)), itp.functionals[j].volume)) /
+        itp.functionals[j].volume_measure
+    contributions = similar(itp.c)
+    if use_threads
+        Threads.@threads for j in eachindex(contributions)
+            contributions[j] = contribution(j)
+        end
+    else
+        map!(contribution, contributions, eachindex(contributions))
     end
     return sum(contributions)
 end
@@ -120,7 +118,7 @@ end
 
 # ── CellAverageFunctional evaluation ─────────────────────────────────────────
 
-# λ(f) = (1/|V|) ∫_V f(x) dx  where x is a plain SVector{Dim,Float64}.
+# λ(f) = (1/|V|) ∫_V f(x) dx  where x is a plain SVector{Dim,RealT}.
 function (func::KernelInterpolation.CellAverageFunctional)(f)
     return ustrip(integral(p -> f(_to_coords(p)), func.volume)) / func.volume_measure
 end
@@ -130,7 +128,7 @@ end
 # A*c recovers the cell averages of s exactly (λᵢ(s) = (Ac)ᵢ by construction),
 # so no integration is needed here.
 _algebraic_avg(itp) = KernelInterpolation.system_matrix(itp) *
-                      KernelInterpolation.coefficients(itp)
+    KernelInterpolation.coefficients(itp)
 
 function KernelInterpolation.cell_averages(itp::KernelInterpolation.CellAverageInterpolation)
     return _algebraic_avg(itp)
@@ -148,7 +146,7 @@ function KernelInterpolation.centroid_enclosing_radius(geoms::AbstractVector{<:M
 end
 
 function KernelInterpolation.centroid_nodeset(
-        functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
+    functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
     coords = [_to_coords(centroid(func.volume)) for func in functionals]
     return KernelInterpolation.NodeSet(coords)
 end
@@ -178,9 +176,9 @@ function KernelInterpolation.fill_distance(nodeset::KernelInterpolation.NodeSet,
                                            domain::Meshes.Geometry;
                                            n_ref::Int = 2000)
     @warn "fill_distance: reference points are drawn randomly via HomogeneousSampling($n_ref). " *
-          "The result is stochastic — repeated calls may differ slightly. " *
-          "Call `Random.seed!` beforehand or pass a pre-built reference NodeSet " *
-          "to the two-argument form for reproducible results." maxlog=1
+        "The result is stochastic — repeated calls may differ slightly. " *
+        "Call `Random.seed!` beforehand or pass a pre-built reference NodeSet " *
+        "to the two-argument form for reproducible results." maxlog=1
     ref_pts   = Meshes.sample(domain, Meshes.HomogeneousSampling(n_ref))
     reference = KernelInterpolation.NodeSet([_to_coords(p) for p in ref_pts])
     return KernelInterpolation.fill_distance(nodeset, reference)
@@ -190,8 +188,8 @@ end
 
 # Return N^dim non-overlapping boxes from a uniform RegularGrid on [a,b]^dim.
 function KernelInterpolation.regular_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1)
-    lo   = ntuple(_ -> Float64(a), dim)
-    hi   = ntuple(_ -> Float64(b), dim)
+    lo   = ntuple(_ -> a, dim)
+    hi   = ntuple(_ -> b, dim)
     dims = ntuple(_ -> N, dim)
     return collect(elements(RegularGrid(lo, hi; dims)))
 end
@@ -200,13 +198,13 @@ end
 # The staggered layout places centroid nodes between primary cells, which improves kernel
 # matrix conditioning compared to a single uniform grid of the same total density.
 function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1)
-    lo   = ntuple(_ -> Float64(a), dim)
-    hi   = ntuple(_ -> Float64(b), dim)
+    lo   = ntuple(_ -> a, dim)
+    hi   = ntuple(_ -> b, dim)
     dims = ntuple(_ -> N, dim)
     primary  = collect(elements(RegularGrid(lo, hi; dims)))
-    h        = (Float64(b) - Float64(a)) / N
-    lo_shift = ntuple(_ -> Float64(a) + h / 2, dim)
-    hi_shift = ntuple(_ -> Float64(b) - h / 2, dim)
+    h        = (b - a) / N
+    lo_shift = ntuple(_ -> a + h / 2, dim)
+    hi_shift = ntuple(_ -> b - h / 2, dim)
     dims_s   = ntuple(_ -> N - 1, dim)
     secondary = collect(elements(RegularGrid(lo_shift, hi_shift; dims = dims_s)))
     return vcat(primary, secondary)
@@ -215,7 +213,7 @@ end
 # Partition [a,b]² into 2N² right triangles by splitting each square cell along its
 # lower-left to upper-right diagonal. Returned as a Vector{Triangle}.
 function KernelInterpolation.triangular_cells(N::Int; a = 0.0, b = 1.0)
-    h    = (Float64(b) - Float64(a)) / N
+    h    = (b - a) / N
     tris = Vector{Triangle}(undef, 2 * N^2)
     k    = 0
     for j in 0:(N - 1), i in 0:(N - 1)
@@ -245,6 +243,11 @@ function KernelInterpolation.tessellation_cells(points, method)
 end
 
 # ── Visualization helpers ─────────────────────────────────────────────────────
+
+function _bounds(func::KernelInterpolation.CellAverageFunctional)
+    bb = boundingbox(func.volume)
+    return _to_coords(minimum(bb)), _to_coords(maximum(bb))
+end
 
 function _domain_1d(funcs)
     lo = minimum(_bounds(func)[1][1] for func in funcs)

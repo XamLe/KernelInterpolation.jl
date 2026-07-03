@@ -24,7 +24,7 @@ See also [`CellAverageFunctional`](@ref), [`cell_average_interpolate`](@ref).
 """
 struct CellAverageInterpolation{Dim, RealT, KernelT, A}
     kernel::KernelT
-    functionals::Vector{CellAverageFunctional{Dim}}
+    functionals::Vector{CellAverageFunctional{Dim, RealT}}
     c::Vector{RealT}
     system_matrix::A
 end
