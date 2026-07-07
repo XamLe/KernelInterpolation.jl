@@ -194,20 +194,21 @@ function KernelInterpolation.regular_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 
     return collect(elements(RegularGrid(lo, hi; dims)))
 end
 
-# Return N^dim + (N-1)^dim boxes: a primary RegularGrid plus a half-cell-shifted copy.
-# The staggered layout places centroid nodes between primary cells, which improves kernel
-# matrix conditioning compared to a single uniform grid of the same total density.
-function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1)
-    lo   = ntuple(_ -> a, dim)
-    hi   = ntuple(_ -> b, dim)
-    dims = ntuple(_ -> N, dim)
-    primary  = collect(elements(RegularGrid(lo, hi; dims)))
-    h        = (b - a) / N
-    lo_shift = ntuple(_ -> a + h / 2, dim)
-    hi_shift = ntuple(_ -> b - h / 2, dim)
-    dims_s   = ntuple(_ -> N - 1, dim)
-    secondary = collect(elements(RegularGrid(lo_shift, hi_shift; dims = dims_s)))
-    return vcat(primary, secondary)
+# Return (2N-1)^dim boxes of uniform width w = width_fraction*(b-a)/N with uniform
+# spacing s = (b-a-w)/(2N-2), covering [a,b]^dim without gaps.  Every interior cell has
+# an exclusive region of width 2s-w > 0, which improves kernel matrix conditioning over a
+# pure tiling.  Requires width_fraction ∈ (1/2, 1); default 3/4.
+function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1,
+                                               width_fraction = 3 // 4)
+    h = (b - a) / N
+    w = width_fraction * h
+    M = 2N - 1
+    M == 1 && return [Box(ntuple(_ -> a, dim), ntuple(_ -> b, dim))]
+    s      = (b - a - w) / (M - 1)
+    starts = [a + k * s for k in 0:(M - 1)]
+    return vec([Box(ntuple(d -> starts[I[d]], dim),
+                    ntuple(d -> starts[I[d]] + w, dim))
+                for I in Iterators.product(ntuple(_ -> 1:M, dim)...)])
 end
 
 # Partition [a,b]² into 2N² right triangles by splitting each square cell along its

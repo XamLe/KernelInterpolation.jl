@@ -119,17 +119,17 @@ funcs = CellAverageFunctional.(cells)
 function regular_cells end
 
 """
-    overlapping_cells(N; a = 0.0, b = 1.0, dim = 1)
+    overlapping_cells(N; a = 0.0, b = 1.0, dim = 1, width_fraction = 3//4)
 
-Return a `Vector` of `N^dim + (N-1)^dim` boxes by superimposing a `Meshes.RegularGrid`
-of `N^dim` primary cells with a second grid of `(N-1)^dim` cells shifted by half a
-cell-width in every direction. The staggered layout places centroid nodes between primary
-cells, improving the conditioning of the kernel Gram matrix relative to a single uniform
-grid at the same total cell count. Requires Meshes.jl.
+Return a `Vector` of `(2N-1)^dim` boxes of uniform width `w = width_fraction*(b-a)/N`,
+placed with uniform spacing `s = (b-a-w)/(2N-2)` along each axis so that `[a,b]^dim` is
+fully covered.  Every interior cell has an exclusive region of width `2s - w > 0`, which
+improves kernel matrix conditioning over a single uniform tiling.  Requires
+`width_fraction ∈ (1/2, 1)`. Requires Meshes.jl.
 
 # Example
 ```julia
-cells = overlapping_cells(8; a = 0.0, b = 1.0, dim = 1)   # 8 + 7 = 15 cells
+cells = overlapping_cells(8; a = 0.0, b = 1.0, dim = 1)   # (2*8-1) = 15 cells
 funcs = CellAverageFunctional.(cells)
 ```
 """
