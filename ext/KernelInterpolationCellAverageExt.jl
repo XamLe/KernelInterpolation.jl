@@ -156,6 +156,21 @@ function KernelInterpolation.diameter(geom::Meshes.Geometry)
     return ustrip(maximum(norm(vs[i] - vs[j]) for i in eachindex(vs) for j in (i+1):lastindex(vs)))
 end
 
+function KernelInterpolation.diameter(box::Meshes.Box)
+    return ustrip(norm(Meshes.maximum(box) - Meshes.minimum(box)))
+end
+
+function KernelInterpolation.enclosing_radius(box::Meshes.Box;
+                                               anchor = centroid(box))
+    mn = to(Meshes.minimum(box))
+    mx = to(Meshes.maximum(box))
+    anc = to(anchor)
+    # Distance from anchor is convex, so maximum over box is at a corner.
+    # The maximizing corner picks min or max independently per dimension.
+    return ustrip(sqrt(sum(max(abs(mn[i] - anc[i]), abs(mx[i] - anc[i]))^2
+                           for i in 1:length(mn))))
+end
+
 function KernelInterpolation.centroid_nodeset(
     functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
     coords = [_to_coords(centroid(func.volume)) for func in functionals]
