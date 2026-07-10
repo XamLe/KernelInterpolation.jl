@@ -65,6 +65,22 @@ Requires `Meshes.jl`. Works for any geometry with `vertices` defined.
 function enclosing_radius end
 
 """
+    diameter(geometry)
+    diameter(geometries)
+
+Return the diameter of a faceted geometry, i.e. the maximum distance between
+any two vertices:
+```math
+    \\mathrm{diam}(V) = \\max_{v, w \\in \\mathrm{vertices}(V)} \\|v - w\\|.
+```
+This is exact for any faceted geometry, convex or not: the diameter of a set equals
+the diameter of its convex hull, which is always attained at a pair of extreme points
+— a subset of the polygon's own vertices.
+Requires `Meshes.jl`. Works for any geometry with `vertices` defined.
+"""
+function diameter end
+
+"""
     centroid_nodeset(functionals)
 
 Return a [`NodeSet`](@ref) containing the centroids of all control volumes in

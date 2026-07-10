@@ -151,6 +151,11 @@ function KernelInterpolation.enclosing_radius(geoms::AbstractVector{<:Meshes.Geo
     end
 end
 
+function KernelInterpolation.diameter(geom::Meshes.Geometry)
+    vs = vertices(geom)
+    return ustrip(maximum(norm(vs[i] - vs[j]) for i in eachindex(vs) for j in (i+1):lastindex(vs)))
+end
+
 function KernelInterpolation.centroid_nodeset(
     functionals::Vector{<:KernelInterpolation.CellAverageFunctional})
     coords = [_to_coords(centroid(func.volume)) for func in functionals]
