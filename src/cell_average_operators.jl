@@ -45,19 +45,24 @@ See also [`cell_average_interpolate`](@ref).
 function assemble_cell_average_matrix end
 
 """
-    centroid_enclosing_radius(geometry)
+    enclosing_radius(geometry; anchor = centroid(geometry))
+    enclosing_radius(geometries; anchors = nothing)
 
-Return the radius of the smallest ball centered at the centroid of `geometry` that
-contains it, i.e. the maximum distance from the centroid to any vertex:
+Return the radius of the smallest ball centered at `anchor` that contains `geometry`,
+i.e. the maximum distance from `anchor` to any vertex:
 ```math
-    r(V) = \\max_{v \\in \\mathrm{vertices}(V)} \\|v - \\mathrm{centroid}(V)\\|.
+    r(V, p) = \\max_{v \\in \\mathrm{vertices}(V)} \\|v - p\\|.
 ```
-Requires `Meshes.jl`. Works for any geometry with `centroid` and `vertices` defined
-(e.g. `Polytope`, `Segment`). A vector of geometries returns the maximum radius.
+For a faceted geometry the maximum is always attained at a vertex, so the result is
+exact. `anchor` defaults to `centroid(geometry)`.
 
-See also [`maximum_cell_diameter`](@ref).
+For a vector of geometries, returns a `Vector{Float64}` of per-cell radii.
+`anchors` may be a matching vector of anchor points (e.g. Voronoi seeds);
+if omitted the centroid of each geometry is used.
+
+Requires `Meshes.jl`. Works for any geometry with `vertices` defined.
 """
-function centroid_enclosing_radius end
+function enclosing_radius end
 
 """
     centroid_nodeset(functionals)

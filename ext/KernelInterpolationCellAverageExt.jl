@@ -136,13 +136,19 @@ end
 
 # ── Geometry utilities ────────────────────────────────────────────────────────
 
-function KernelInterpolation.centroid_enclosing_radius(geom::Meshes.Geometry)
-    c = centroid(geom)
-    return ustrip.(maximum(norm(v - c) for v in vertices(geom)))
+function KernelInterpolation.enclosing_radius(geom::Meshes.Geometry;
+                                               anchor = centroid(geom))
+    return ustrip(maximum(norm(v - anchor) for v in vertices(geom)))
 end
 
-function KernelInterpolation.centroid_enclosing_radius(geoms::AbstractVector{<:Meshes.Geometry})
-    return ustrip.(maximum(KernelInterpolation.centroid_enclosing_radius, geoms))
+function KernelInterpolation.enclosing_radius(geoms::AbstractVector{<:Meshes.Geometry};
+                                               anchors = nothing)
+    if isnothing(anchors)
+        return [KernelInterpolation.enclosing_radius(g) for g in geoms]
+    else
+        return [KernelInterpolation.enclosing_radius(g; anchor = a)
+                for (g, a) in zip(geoms, anchors)]
+    end
 end
 
 function KernelInterpolation.centroid_nodeset(
