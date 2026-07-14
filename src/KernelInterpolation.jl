@@ -74,6 +74,7 @@ export phi, Phi, order, local_order
 export Identity, PartialDerivative, Gradient, Laplacian, EllipticOperator
 export CellAverageFunctional, assemble_cell_average_matrix, enclosing_radius, diameter, centroid_nodeset
 export CellAverageInterpolation, cell_average_interpolate, cell_averages, functionals
+export ExpandedCellAverageInterpolation, expand
 export regular_cells, overlapping_cells, triangular_cells, tessellation_cells
 export PoissonEquation, EllipticEquation, AdvectionEquation, HeatEquation,
        AdvectionDiffusionEquation

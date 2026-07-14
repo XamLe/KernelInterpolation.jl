@@ -25,7 +25,7 @@ struct CellAverageFunctional{Dim, RealT <: Real}
 end
 
 """
-    assemble_cell_average_matrix(functionals, kernel)
+    assemble_cell_average_matrix(functionals, kernel; n_gl = nothing)
 
 Assemble the kernel Gram matrix for cell-average interpolation. Entry ``(i,j)`` is
 
@@ -33,14 +33,23 @@ Assemble the kernel Gram matrix for cell-average interpolation. Entry ``(i,j)`` 
     A_{ij} = \\frac{1}{|V_i||V_j|}\\int_{V_i}\\int_{V_j} K(x,y)\\,\\mathrm{d}y\\,\\mathrm{d}x.
 ```
 
-The element type `RealT` of the returned matrix is inferred from the `RealT` parameter of
-the `CellAverageFunctional`s, which is determined by the coordinate type of the underlying
-geometry. Construct the functionals with BigFloat geometry (via `regular_cells(...; RealT=BigFloat)`)
-and call `setprecision(BigFloat, bits)` beforehand to perform assembly and solve in higher
-precision.
-Requires Meshes.jl.
+By default (`n_gl = nothing`) each double integral is computed via nested h-adaptive
+cubature. If `n_gl` is an integer, a tensor-product Gauss-Legendre rule with `n_gl` nodes
+per dimension is used instead:
 
-See also [`cell_average_interpolate`](@ref).
+```math
+    A_{ij} \\approx \\sum_k \\sum_l \\tilde{w}_{ik}\\, K(y_{ik}, y_{jl})\\, \\tilde{w}_{jl},
+    \\quad \\tilde{w}_{jk} = w_{jk}/|V_j|,
+```
+
+which is much faster and avoids adaptive overhead. GL assembly requires all control volumes
+to be axis-aligned boxes (`Meshes.Segment`, `Meshes.Quadrangle`, `Meshes.Hexahedron`, or
+`Meshes.Box`).
+
+The element type `RealT` of the returned matrix is inferred from the `RealT` parameter of
+the `CellAverageFunctional`s. Requires Meshes.jl.
+
+See also [`cell_average_interpolate`](@ref), [`expand`](@ref).
 """
 function assemble_cell_average_matrix end
 

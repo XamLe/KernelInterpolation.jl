@@ -1,9 +1,10 @@
 module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric, norm, cond
-using Meshes: Meshes, Box, Point, Triangle, Polytope, measure, to, ustrip, integral,
-              centroid, vertices, boundingbox, RegularGrid, elements, nelements, element,
-              tesselate, DelaunayTesselation, VoronoiTesselation, PointSet, RowMaximum
+using Meshes: Meshes, Box, Segment, Quadrangle, Hexahedron, Point, Triangle, Polytope,
+              measure, to, ustrip, integral, centroid, vertices, boundingbox, RegularGrid,
+              elements, nelements, element, tesselate, DelaunayTesselation,
+              VoronoiTesselation, PointSet, RowMaximum
 using RecipesBase: @recipe, @series
 using FastGaussQuadrature
 using IntegrationInterface
@@ -49,25 +50,41 @@ end
 
 function KernelInterpolation.assemble_cell_average_matrix(
         functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
-        kernel::KernelInterpolation.AbstractKernel) where {Dim, RealT}
+        kernel::KernelInterpolation.AbstractKernel;
+        n_gl::Union{Int, Nothing} = nothing) where {Dim, RealT}
     n         = length(functionals)
     A         = Matrix{RealT}(undef, n, n)
     n_entries = n * (n + 1) ÷ 2
     # BigFloat uses MPFR task-local state; sequential loop avoids pool contention.
     use_threads = !(RealT <: BigFloat)
-    @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, upper triangle, $(use_threads ? Threads.nthreads() : 1) thread(s), RealT=$RealT)"
+
+    if isnothing(n_gl)
+        @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, h-adaptive, $(use_threads ? Threads.nthreads() : 1) thread(s), RealT=$RealT)"
+        entry = (i, j) -> _entry(functionals[i], functionals[j], kernel)
+    else
+        all(f -> _is_box_like(f.volume), functionals) ||
+            error("GL assembly requires Box-like geometries; got $(typeof(functionals[1].volume))")
+        t1d, w1d = FastGaussQuadrature.gausslegendre(n_gl)
+        t1d = RealT.(t1d)
+        w1d = RealT.(w1d)
+        cells_nw = [_gl_cell_nodes_weights(f, t1d, w1d, Val(Dim)) for f in functionals]
+        @info "Assembling $(n)×$(n) cell-average matrix ($n_entries entries, GL n_gl=$n_gl, $(use_threads ? Threads.nthreads() : 1) thread(s), RealT=$RealT)"
+        entry = (i, j) -> _gl_entry(cells_nw[i][1], cells_nw[i][2],
+                                     cells_nw[j][1], cells_nw[j][2], kernel)
+    end
+
     # Exploit kernel symmetry K(x,y) = K(y,x): compute upper triangle only.
     t = @elapsed if use_threads
         Threads.@threads for i in 1:n
             for j in i:n
-                A[i, j] = _entry(functionals[i], functionals[j], kernel)
+                A[i, j] = entry(i, j)
                 A[j, i] = A[i, j]
             end
         end
     else
         for i in 1:n
             for j in i:n
-                A[i, j] = _entry(functionals[i], functionals[j], kernel)
+                A[i, j] = entry(i, j)
                 A[j, i] = A[i, j]
             end
         end
@@ -81,10 +98,11 @@ function KernelInterpolation.cell_average_interpolate(
     functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
     values::AbstractVector,
     kernel::KernelInterpolation.AbstractKernel;
+    n_gl = nothing,
     linsolve = nothing) where {Dim, RealT}
     n = length(functionals)
     @assert length(values) == n "number of values must match number of functionals"
-    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel)
+    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel; n_gl)
     # Wrap as Symmetric; kernel Gram matrices are SPD. Symmetric picks the upper triangle
     # as authoritative when independent adaptive evaluations of A[i,j]/A[j,i] differ.
     A_sym = Symmetric(A)
@@ -114,6 +132,93 @@ end
 
 function (itp::KernelInterpolation.CellAverageInterpolation{1})(x::Real)
     return itp([x])
+end
+
+# ── GL expansion ─────────────────────────────────────────────────────────────
+
+# Return (min_coords, max_coords) as plain RealT vectors for supported cell types.
+# Box: direct min/max access (no vertices method on Box).
+_cell_bounds(box::Meshes.Box, ::Type{RealT}) where {RealT} =
+    RealT.(ustrip.(to(Meshes.minimum(box)))), RealT.(ustrip.(to(Meshes.maximum(box))))
+
+# Segment, Quadrangle, Hexahedron: axis-aligned, so boundingbox gives exact bounds.
+_cell_bounds(geom::Meshes.Geometry, ::Type{RealT}) where {RealT} =
+    _cell_bounds(boundingbox(geom), RealT)
+
+_is_box_like(geom) = geom isa Meshes.Box || geom isa Meshes.Segment ||
+                     geom isa Meshes.Quadrangle || geom isa Meshes.Hexahedron
+
+# Compute GL nodes (Dim × n_gl^Dim) and base weights w_jk/|V_j| for one cell.
+# Shared by expand() and GL matrix assembly.
+function _gl_cell_nodes_weights(func,
+                                 t1d::AbstractVector{RealT},
+                                 w1d::AbstractVector{RealT},
+                                 ::Val{Dim}) where {RealT, Dim}
+    mn, mx = _cell_bounds(func.volume, RealT)
+    mid    = (mn .+ mx) ./ 2
+    half   = (mx .- mn) ./ 2
+    n_gl   = length(t1d)
+    n      = n_gl^Dim
+    nodes    = Matrix{RealT}(undef, Dim, n)
+    bweights = Vector{RealT}(undef, n)
+    for (k, idx) in enumerate(Iterators.product(ntuple(_ -> 1:n_gl, Val(Dim))...))
+        for i in 1:Dim
+            nodes[i, k] = mid[i] + half[i] * t1d[idx[i]]
+        end
+        bweights[k] = prod(w1d[idx[i]] * half[i] for i in 1:Dim) / func.volume_measure
+    end
+    return nodes, bweights
+end
+
+# A_{ij} ≈ Σ_k Σ_l bw_i[k] · K(y_ik, y_jl) · bw_j[l]
+function _gl_entry(nodes_i, bw_i, nodes_j, bw_j, kernel)
+    s = zero(promote_type(eltype(bw_i), eltype(bw_j)))
+    for l in axes(nodes_j, 2)
+        yj = view(nodes_j, :, l)
+        for k in axes(nodes_i, 2)
+            s += bw_i[k] * kernel(view(nodes_i, :, k), yj) * bw_j[l]
+        end
+    end
+    return s
+end
+
+function KernelInterpolation.expand(
+        itp::KernelInterpolation.CellAverageInterpolation{Dim, RealT},
+        n_gl::Int) where {Dim, RealT}
+    all(f -> _is_box_like(f.volume), itp.functionals) ||
+        error("expand currently only supports Box/Segment/Quadrangle/Hexahedron geometries; got $(typeof(itp.functionals[1].volume))")
+
+    t1d, w1d = FastGaussQuadrature.gausslegendre(n_gl)
+    t1d = RealT.(t1d)
+    w1d = RealT.(w1d)
+
+    N          = length(itp.functionals)
+    n_per_cell = n_gl^Dim
+    nodes      = Matrix{RealT}(undef, Dim, N * n_per_cell)
+    coeffs     = Vector{RealT}(undef, N * n_per_cell)
+
+    for (j, func) in enumerate(itp.functionals)
+        cell_nodes, bweights = _gl_cell_nodes_weights(func, t1d, w1d, Val(Dim))
+        offset = (j - 1) * n_per_cell
+        nodes[:, offset+1:offset+n_per_cell]  .= cell_nodes
+        coeffs[offset+1:offset+n_per_cell]    .= itp.c[j] .* bweights
+    end
+
+    return KernelInterpolation.ExpandedCellAverageInterpolation{Dim, RealT,
+                                                                 typeof(itp.kernel)}(
+        itp.kernel, nodes, coeffs)
+end
+
+function (eitp::KernelInterpolation.ExpandedCellAverageInterpolation)(x::AbstractVector)
+    s = zero(eltype(eitp.coefficients))
+    for k in axes(eitp.nodes, 2)
+        s += eitp.coefficients[k] * eitp.kernel(x, view(eitp.nodes, :, k))
+    end
+    return s
+end
+
+function (eitp::KernelInterpolation.ExpandedCellAverageInterpolation{1})(x::Real)
+    return eitp([x])
 end
 
 # ── CellAverageFunctional evaluation ─────────────────────────────────────────

@@ -104,6 +104,55 @@ over each of its control volumes. Requires Meshes.jl.
 function cell_averages end
 
 """
+    ExpandedCellAverageInterpolation
+
+A fast-evaluation form of [`CellAverageInterpolation`](@ref) obtained by pre-computing
+Gauss-Legendre quadrature nodes and weights for each cell and collapsing the interpolant
+into a plain nodal kernel sum. Evaluation at a point `x` costs `N * n_gl^Dim` kernel
+evaluations with no adaptive quadrature overhead.
+
+Constructed via [`expand`](@ref). Currently requires all control volumes to be
+axis-aligned boxes (`Meshes.Segment` in 1D, `Meshes.Quadrangle` in 2D,
+`Meshes.Hexahedron` in 3D, or `Meshes.Box`).
+
+# Fields
+- `kernel`: the kernel function
+- `nodes::Matrix{RealT}`: GL nodes in physical space, stored column-wise (`Dim × (N·n_gl^Dim)`)
+- `coefficients::Vector{RealT}`: combined coefficients ``\\tilde{c}_{jk} = c_j w_{jk} / |V_j|``
+"""
+struct ExpandedCellAverageInterpolation{Dim, RealT <: Real, KernelT}
+    kernel::KernelT
+    nodes::Matrix{RealT}
+    coefficients::Vector{RealT}
+end
+
+function Base.show(io::IO, eitp::ExpandedCellAverageInterpolation{Dim}) where {Dim}
+    n = length(eitp.coefficients)
+    return print(io,
+                 "ExpandedCellAverageInterpolation with $n GL nodes in $(Dim)D and kernel $(eitp.kernel).")
+end
+
+"""
+    expand(itp::CellAverageInterpolation, n_gl::Int)
+
+Pre-compute a `n_gl`-point-per-dimension Gauss-Legendre expansion of `itp`, returning an
+[`ExpandedCellAverageInterpolation`](@ref) that evaluates without adaptive quadrature.
+
+For each cell ``V_j`` the GL nodes ``y_{jk}`` in physical space and the combined
+coefficients ``\\tilde{c}_{jk} = c_j w_{jk} / |V_j|`` are stored, so that
+
+```math
+    s(x) \\approx \\sum_{j,k} \\tilde{c}_{jk}\\, K(y_{jk}, x).
+```
+
+Currently requires all control volumes to be axis-aligned boxes (`Meshes.Segment` in 1D,
+`Meshes.Quadrangle` in 2D, `Meshes.Hexahedron` in 3D, or `Meshes.Box`). Requires Meshes.jl.
+
+See also [`CellAverageInterpolation`](@ref), [`ExpandedCellAverageInterpolation`](@ref).
+"""
+function expand end
+
+"""
     regular_cells(N; a = 0.0, b = 1.0, dim = 1)
 
 Return a `Vector` of `N^dim` non-overlapping axis-aligned boxes that uniformly tile
