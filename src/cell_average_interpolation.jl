@@ -87,9 +87,10 @@ by solving the linear system ``Ac = \bar{f}`` with matrix entries
 ```
 Returns a [`CellAverageInterpolation`](@ref) that can be evaluated at any point.
 
-Requires Meshes.jl. The optional `ibackend` and `dbackend` keyword arguments are
-forwarded to Meshes.jl's `integral` for the quadrature backend. If `linsolve` is
-provided it is passed to LinearSolve.jl; otherwise the backslash operator is used.
+Requires Meshes.jl. If `system_matrix` is provided it is used as the Gram matrix
+directly and assembly is skipped — the caller is responsible for ensuring it was
+assembled with the same `functionals` in the same order. If `linsolve` is provided
+it is passed to LinearSolve.jl; otherwise the backslash operator is used.
 
 See also [`CellAverageFunctional`](@ref), [`assemble_cell_average_matrix`](@ref).
 """

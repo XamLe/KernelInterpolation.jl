@@ -99,10 +99,15 @@ function KernelInterpolation.cell_average_interpolate(
     values::AbstractVector,
     kernel::KernelInterpolation.AbstractKernel;
     n_gl = nothing,
+    system_matrix = nothing,
     linsolve = nothing) where {Dim, RealT}
     n = length(functionals)
     @assert length(values) == n "number of values must match number of functionals"
-    A     = KernelInterpolation.assemble_cell_average_matrix(functionals, kernel; n_gl)
+    A = if isnothing(system_matrix)
+        KernelInterpolation.assemble_cell_average_matrix(functionals, kernel; n_gl)
+    else
+        Matrix{RealT}(system_matrix)
+    end
     # Wrap as Symmetric; kernel Gram matrices are SPD. Symmetric picks the upper triangle
     # as authoritative when independent adaptive evaluations of A[i,j]/A[j,i] differ.
     A_sym = Symmetric(A)
