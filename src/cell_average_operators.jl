@@ -13,14 +13,16 @@ This functionality is provided by the KernelInterpolationCellAverageExt extensio
 requires Meshes.jl to be loaded.
 
 # Fields
-- `volume::Any`: The control volume — any parametrized Meshes.jl geometry
+- `volume::GeomT`: The control volume — any parametrized Meshes.jl geometry
 - `volume_measure::RealT`: The volume measure |V| in the same precision as the geometry
 
 The type parameter `RealT` is determined by the geometry's coordinate type (e.g. `Float64`
-or `BigFloat`) and controls the floating-point precision used throughout quadrature.
+or `BigFloat`) and controls the floating-point precision used throughout quadrature. `GeomT`
+is the concrete geometry type (e.g. `Meshes.Box`) when all cells share one shape, or a common
+(possibly abstract) supertype for heterogeneous cell collections.
 """
-struct CellAverageFunctional{Dim, RealT <: Real}
-    volume::Any          # any parametrized Meshes.jl geometry
+struct CellAverageFunctional{Dim, RealT <: Real, GeomT}
+    volume::GeomT         # any parametrized Meshes.jl geometry
     volume_measure::RealT
 end
 

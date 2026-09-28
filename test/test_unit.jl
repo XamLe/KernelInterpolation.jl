@@ -1685,47 +1685,47 @@ end
 
 @testitem "CellAverageFunctional" setup=[Setup, AdditionalImports] begin
     using Meshes: Meshes, Box, Point
-    
+
     # Test 1D case: [0, 1] subdivided into 3 intervals
     @test begin
         kernel = GaussKernel{1}(shape_parameter = 1.0)
-        
+
         # Create 3 control volumes (cell-average functionals)
         volumes = [
             Box(Point(0.0), Point(1/3)),
             Box(Point(1/3), Point(2/3)),
             Box(Point(2/3), Point(1.0))
         ]
-        
+
         functionals = [CellAverageFunctional(v) for v in volumes]
-        
+
         # Check that functionals are created correctly
         @test length(functionals) == 3
         @test functionals[1].volume_measure ≈ 1/3
         @test functionals[2].volume_measure ≈ 1/3
         @test functionals[3].volume_measure ≈ 1/3
-        
+
         # Assemble the reconstruction matrix
         A = assemble_cell_average_matrix(functionals, kernel)
-        
+
         # Check matrix dimensions
         @test size(A) == (3, 3)
-        
+
         # Matrix should be symmetric (for radial kernels with symmetric functionals)
         @test isapprox(A, A', atol=1e-10)
-        
+
         # Diagonal entries should be positive
         for i in 1:3
             @test A[i, i] > 0
         end
-        
+
         true
     end
-    
+
     # Test 2D case: [0, 1] × [0, 1] subdivided into 4 squares
     @test begin
         kernel = GaussKernel{2}(shape_parameter = 1.0)
-        
+
         # Create 4 control volumes (2×2 grid)
         volumes = [
             Box(Point(0.0, 0.0), Point(0.5, 0.5)),    # bottom-left
@@ -1733,30 +1733,30 @@ end
             Box(Point(0.0, 0.5), Point(0.5, 1.0)),    # top-left
             Box(Point(0.5, 0.5), Point(1.0, 1.0))     # top-right
         ]
-        
+
         functionals = [CellAverageFunctional(v) for v in volumes]
-        
+
         # Check that functionals are created correctly
         @test length(functionals) == 4
         for i in 1:4
             @test isapprox(functionals[i].volume_measure, 0.25, atol=1e-10)
         end
-        
+
         # Assemble the reconstruction matrix
         A = assemble_cell_average_matrix(functionals, kernel)
-        
+
         # Check matrix dimensions
         @test size(A) == (4, 4)
-        
+
         # Matrix should be symmetric
         @test isapprox(A, A', atol=1e-10)
-        
+
         # Diagonal entries should be positive
         for i in 1:4
             @test A[i, i] > 0
         end
-        
-        # Diagonal entries should be larger than off-diagonal entries 
+
+        # Diagonal entries should be larger than off-diagonal entries
         # (self-interaction > cross-interaction for Gaussian kernel)
         for i in 1:4
             for j in 1:4
@@ -1765,7 +1765,149 @@ end
                 end
             end
         end
-        
+
         true
     end
+end
+
+@testitem "CellAverageInterpolation" setup=[Setup, AdditionalImports] begin
+    # 1D: constant field. The exact algebraic identity Ac = f̄ must hold to solve
+    # tolerance; pointwise reproduction of the constant away from cell centers is only
+    # approximate (no polynomial augmentation), so that check uses a loose tolerance.
+    kernel = GaussKernel{1}(shape_parameter = 1.0)
+    cells = regular_cells(4; dim = 1)
+    functionals = CellAverageFunctional.(cells)
+    values = fill(2.0, 4)
+    itp = cell_average_interpolate(functionals, values, kernel)
+    @test itp isa CellAverageInterpolation
+    @test cell_averages(itp)≈values atol=1e-6
+    @test isapprox(itp(0.5), 2.0, atol = 0.05)
+
+    # 2D: linear field, cell averages computed via the CellAverageFunctional call
+    # operator λ(f) = (1/|V|) ∫_V f(x) dx.
+    kernel2 = GaussKernel{2}(shape_parameter = 1.0)
+    cells2 = regular_cells(3; dim = 2)
+    functionals2 = CellAverageFunctional.(cells2)
+    f(x) = x[1] + x[2]
+    values2 = [func(f) for func in functionals2]
+    itp2 = cell_average_interpolate(functionals2, values2, kernel2)
+    @test cell_averages(itp2)≈values2 atol=1e-6
+    @test isapprox(itp2([0.5, 0.5]), f([0.5, 0.5]), atol = 0.05)
+end
+
+@testitem "CellAverageInterpolation GL assembly and expand" setup=[Setup, AdditionalImports] begin
+    kernel = GaussKernel{1}(shape_parameter = 1.0)
+    cells = regular_cells(3; dim = 1)
+    functionals = CellAverageFunctional.(cells)
+    values = [1.0, 2.0, 1.5]
+
+    # GL assembly with enough nodes should match h-adaptive assembly closely.
+    A_adaptive = assemble_cell_average_matrix(functionals, kernel)
+    A_gl = assemble_cell_average_matrix(functionals, kernel; n_gl = 8)
+    @test isapprox(A_gl, A_adaptive, atol = 1e-6)
+
+    itp_adaptive = cell_average_interpolate(functionals, values, kernel)
+    itp_gl = cell_average_interpolate(functionals, values, kernel; n_gl = 8)
+    @test isapprox(coefficients(itp_gl), coefficients(itp_adaptive), atol = 1e-5)
+
+    # expand() precomputes GL nodes/weights; evaluation must match the unexpanded
+    # interpolant it was expanded from.
+    eitp = expand(itp_gl, 8)
+    @test eitp isa ExpandedCellAverageInterpolation
+    for x in (0.1, 0.5, 0.9)
+        @test isapprox(eitp(x), itp_gl(x), atol = 1e-6)
+    end
+
+    # Negative path: GL assembly and expand require Box-like (axis-aligned) geometries.
+    triangles = triangular_cells(1)
+    functionals_tri = CellAverageFunctional.(triangles)
+    kernel2 = GaussKernel{2}(shape_parameter = 1.0)
+    @test_throws ErrorException assemble_cell_average_matrix(functionals_tri, kernel2;
+                                                             n_gl = 4)
+    itp_tri = cell_average_interpolate(functionals_tri, [1.0, 2.0], kernel2)
+    @test_throws ErrorException expand(itp_tri, 4)
+end
+
+@testitem "CellAverageInterpolation BigFloat" setup=[Setup, AdditionalImports] begin
+    using Meshes: Meshes, Box, Point
+
+    # BigFloat precision is only usable through the GL assembly + expand() path: the
+    # default h-adaptive assembly and direct CellAverageInterpolation evaluation both call
+    # Meshes.integral, which does not support BigFloat-coordinate geometries (see the
+    # warning on cell_average_interpolate's docstring). Only exercise the working path here.
+    kernel = GaussKernel{1}(shape_parameter = 1.0)
+    volumes = [Box(Point(big(0.0)), Point(big(1) // 3)),
+        Box(Point(big(1) // 3), Point(big(2) // 3)),
+        Box(Point(big(2) // 3), Point(big(1.0)))]
+    functionals = CellAverageFunctional.(volumes)
+    @test functionals[1].volume_measure isa BigFloat
+
+    A = assemble_cell_average_matrix(functionals, kernel; n_gl = 4)
+    @test eltype(A) == BigFloat
+
+    itp = cell_average_interpolate(functionals, [1.0, 2.0, 1.5], kernel; n_gl = 4)
+    @test eltype(coefficients(itp)) == BigFloat
+
+    eitp = expand(itp, 4)
+    @test eltype(eitp.coefficients) == BigFloat
+    val = eitp(big(0.5))
+    @test val isa BigFloat
+    @test isfinite(val)
+end
+
+@testitem "Cell geometry constructors" setup=[Setup, AdditionalImports] begin
+    using Meshes: Meshes, Segment, Quadrangle, Hexahedron, Box, Triangle,
+                  DelaunayTesselation, VoronoiTesselation
+
+    # regular_cells: N^dim grid cells, using Meshes' box-like cell type per dimension.
+    @test length(regular_cells(5; dim = 1)) == 5
+    @test eltype(regular_cells(5; dim = 1)) <: Segment
+    @test length(regular_cells(4; dim = 2)) == 16
+    @test eltype(regular_cells(4; dim = 2)) <: Quadrangle
+    @test length(regular_cells(3; dim = 3)) == 27
+    @test eltype(regular_cells(3; dim = 3)) <: Hexahedron
+
+    # overlapping_cells: (2N-1)^dim boxes.
+    @test length(overlapping_cells(5; dim = 1)) == 9
+    @test eltype(overlapping_cells(5; dim = 1)) <: Box
+    @test length(overlapping_cells(3; dim = 2)) == 25
+
+    # triangular_cells: 2N^2 triangles partitioning [a,b]^2.
+    tris = triangular_cells(4)
+    @test length(tris) == 32
+    @test eltype(tris) <: Triangle
+
+    # tessellation_cells: wraps Meshes tessellation methods.
+    points = homogeneous_hypercube(10, 0.0, 1.0; dim = 2)
+    delaunay_cells = tessellation_cells(points, DelaunayTesselation())
+    @test length(delaunay_cells) > 0
+    @test all(c -> c isa Triangle, delaunay_cells)
+
+    voronoi_cells = tessellation_cells(points, VoronoiTesselation())
+    @test length(voronoi_cells) == length(points)
+end
+
+@testitem "Cell-average geometry utilities" setup=[Setup, AdditionalImports] begin
+    using Meshes: Meshes, Box
+    using Random: Random
+
+    box = Box((0.0, 0.0), (2.0, 1.0))
+    @test isapprox(diameter(box), sqrt(5), atol = 1e-10)
+    @test isapprox(enclosing_radius(box), sqrt(5) / 2, atol = 1e-10)
+
+    cells = regular_cells(3; dim = 1)
+    functionals = CellAverageFunctional.(cells)
+    radii = enclosing_radius([func.volume for func in functionals])
+    @test isapprox(radii, fill(1 / 6, 3), atol = 1e-10)
+
+    cn = centroid_nodeset(functionals)
+    @test length(cn) == 3
+    @test isapprox(collect(cn), [[1 / 6], [0.5], [5 / 6]], atol = 1e-10)
+
+    # Meshes.Geometry-domain fill_distance overload; seed for a reproducible estimate.
+    Random.seed!(42)
+    domain = Box((0.0,), (1.0,))
+    nodeset = NodeSet([0.25, 0.75])
+    hd = fill_distance(nodeset, domain; n_ref = 500)
+    @test isapprox(hd, 0.25, atol = 0.05)
 end

@@ -22,9 +22,9 @@ Constructed via [`cell_average_interpolate`](@ref). Requires Meshes.jl.
 
 See also [`CellAverageFunctional`](@ref), [`cell_average_interpolate`](@ref).
 """
-struct CellAverageInterpolation{Dim, RealT, KernelT, A}
+struct CellAverageInterpolation{Dim, RealT, KernelT, A, GeomT}
     kernel::KernelT
-    functionals::Vector{CellAverageFunctional{Dim, RealT}}
+    functionals::Vector{CellAverageFunctional{Dim, RealT, GeomT}}
     c::Vector{RealT}
     system_matrix::A
 end
@@ -73,7 +73,7 @@ functionals(itp::CellAverageInterpolation) = itp.functionals
 
 @doc raw"""
     cell_average_interpolate(functionals, values, kernel;
-                             ibackend = nothing, dbackend = nothing, linsolve = nothing)
+                             n_gl = nothing, system_matrix = nothing, linsolve = nothing)
 
 Interpolate cell-average `values` using the kernel `kernel` and the
 [`CellAverageFunctional`](@ref)s in `functionals`. Determines the coefficients ``c_j``
@@ -87,10 +87,20 @@ by solving the linear system ``Ac = \bar{f}`` with matrix entries
 ```
 Returns a [`CellAverageInterpolation`](@ref) that can be evaluated at any point.
 
-Requires Meshes.jl. If `system_matrix` is provided it is used as the Gram matrix
-directly and assembly is skipped — the caller is responsible for ensuring it was
-assembled with the same `functionals` in the same order. If `linsolve` is provided
-it is passed to LinearSolve.jl; otherwise the backslash operator is used.
+Requires Meshes.jl. `n_gl`, if given, is forwarded to [`assemble_cell_average_matrix`](@ref)
+to use Gauss-Legendre assembly instead of the default h-adaptive assembly. If
+`system_matrix` is provided it is used as the Gram matrix directly and assembly is skipped
+— the caller is responsible for ensuring it was assembled with the same `functionals` in the
+same order. If `linsolve` is provided it is passed to LinearSolve.jl; otherwise the
+backslash operator is used.
+
+!!! warning "Non-Float64 precision (e.g. BigFloat)"
+    Evaluating the returned [`CellAverageInterpolation`](@ref) directly (calling `itp(x)`)
+    always integrates via `Meshes.integral` (h-adaptive), regardless of how the matrix was
+    assembled. As of Meshes.jl 0.57, this h-adaptive integration does not support
+    non-`Float64` coordinate types and raises a `StackOverflowError`. For non-`Float64`
+    precision, assemble with `n_gl` and evaluate via [`expand`](@ref) instead, which
+    precomputes Gauss-Legendre nodes/weights and never calls `Meshes.integral` again.
 
 See also [`CellAverageFunctional`](@ref), [`assemble_cell_average_matrix`](@ref).
 """

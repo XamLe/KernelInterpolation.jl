@@ -1,12 +1,11 @@
 module KernelInterpolationCellAverageExt
 
 using LinearAlgebra: Symmetric, norm, cond
-using Meshes: Meshes, Box, Segment, Quadrangle, Hexahedron, Point, Triangle, Polytope,
+using Meshes: Meshes, Box, Point, Triangle,
               measure, to, ustrip, integral, centroid, vertices, boundingbox, RegularGrid,
-              elements, nelements, element, tesselate, DelaunayTesselation,
-              VoronoiTesselation, PointSet, RowMaximum
+              elements, nelements, element, tesselate, PointSet
 using RecipesBase: @recipe, @series
-using FastGaussQuadrature
+using FastGaussQuadrature: FastGaussQuadrature
 
 if pkgversion(Meshes) < v"0.57"
     error("""
@@ -19,7 +18,7 @@ using KernelInterpolation: KernelInterpolation
 
 # Meshes stores coordinates as Unitful quantities; strip units to get plain Float64 SVectors.
 function _to_coords(p::Point)
-    return Meshes.ustrip.(Meshes.to(p))
+    return ustrip.(to(p))
 end
 
 # ── CellAverageFunctional constructor ─────────────────────────────────────────
@@ -29,7 +28,8 @@ end
 function KernelInterpolation.CellAverageFunctional(volume::Meshes.Geometry)
     vol_measure = ustrip(measure(volume))
     RealT = typeof(vol_measure)
-    return KernelInterpolation.CellAverageFunctional{Meshes.embeddim(volume), RealT}(
+    return KernelInterpolation.CellAverageFunctional{
+        Meshes.embeddim(volume), RealT, typeof(volume)}(
         volume, vol_measure)
 end
 
@@ -48,7 +48,7 @@ function _entry(func_i::KernelInterpolation.CellAverageFunctional,
 end
 
 function KernelInterpolation.assemble_cell_average_matrix(
-        functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
+        functionals::AbstractVector{<:KernelInterpolation.CellAverageFunctional{Dim, RealT}},
         kernel::KernelInterpolation.AbstractKernel;
         n_gl::Union{Int, Nothing} = nothing) where {Dim, RealT}
     n         = length(functionals)
@@ -94,7 +94,7 @@ function KernelInterpolation.assemble_cell_average_matrix(
 end
 
 function KernelInterpolation.cell_average_interpolate(
-    functionals::AbstractVector{KernelInterpolation.CellAverageFunctional{Dim, RealT}},
+    functionals::AbstractVector{<:KernelInterpolation.CellAverageFunctional{Dim, RealT}},
     values::AbstractVector,
     kernel::KernelInterpolation.AbstractKernel;
     n_gl = nothing,
@@ -143,7 +143,7 @@ end
 # Return (min_coords, max_coords) as plain RealT vectors for supported cell types.
 # Box: direct min/max access (no vertices method on Box).
 _cell_bounds(box::Meshes.Box, ::Type{RealT}) where {RealT} =
-    RealT.(ustrip.(to(Meshes.minimum(box)))), RealT.(ustrip.(to(Meshes.maximum(box))))
+    RealT.(ustrip.(to(minimum(box)))), RealT.(ustrip.(to(maximum(box))))
 
 # Segment, Quadrangle, Hexahedron: axis-aligned, so boundingbox gives exact bounds.
 _cell_bounds(geom::Meshes.Geometry, ::Type{RealT}) where {RealT} =
@@ -266,13 +266,13 @@ function KernelInterpolation.diameter(geom::Meshes.Geometry)
 end
 
 function KernelInterpolation.diameter(box::Meshes.Box)
-    return ustrip(norm(Meshes.maximum(box) - Meshes.minimum(box)))
+    return ustrip(norm(maximum(box) - minimum(box)))
 end
 
 function KernelInterpolation.enclosing_radius(box::Meshes.Box;
                                                anchor = centroid(box))
-    mn = to(Meshes.minimum(box))
-    mx = to(Meshes.maximum(box))
+    mn = to(minimum(box))
+    mx = to(maximum(box))
     anc = to(anchor)
     # Distance from anchor is convex, so maximum over box is at a corner.
     # The maximizing corner picks min or max independently per dimension.

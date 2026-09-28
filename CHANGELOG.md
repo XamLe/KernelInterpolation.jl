@@ -9,6 +9,10 @@ for human readability.
 
 #### Added
 
+- Added cell-average interpolation via `cell_average_interpolate`, `CellAverageInterpolation`,
+  and `CellAverageFunctional`, supporting h-adaptive and Gauss-Legendre kernel-matrix assembly,
+  fast evaluation via `expand`/`ExpandedCellAverageInterpolation`, and `BigFloat` precision.
+  Requires Meshes.jl (weak dependency).
 - Added `fill_distance` function ([#187]).
 - Added support for RBF-FD ([#182]).
 - Added `differentiation_matrix` to assemble the matrix of a differential operator (sparse for

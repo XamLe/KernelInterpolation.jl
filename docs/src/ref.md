@@ -37,6 +37,13 @@ Modules = [KernelInterpolation]
 Pages = ["interpolation.jl"]
 ```
 
+## Cell-average interpolation
+
+```@autodocs
+Modules = [KernelInterpolation]
+Pages = ["cell_average_operators.jl", "cell_average_interpolation.jl"]
+```
+
 ## Regularization
 
 ```@autodocs
