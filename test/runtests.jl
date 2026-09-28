@@ -14,4 +14,5 @@ end
     import OrdinaryDiffEqNonlinearSolve
     using StaticArrays: SVector, MVector
     using Meshes: Meshes, Sphere, Point, PointSet, RegularSampling
+    using FastGaussQuadrature
 end

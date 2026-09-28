@@ -7,7 +7,6 @@ using Meshes: Meshes, Box, Segment, Quadrangle, Hexahedron, Point, Triangle, Pol
               VoronoiTesselation, PointSet, RowMaximum
 using RecipesBase: @recipe, @series
 using FastGaussQuadrature
-using IntegrationInterface
 
 if pkgversion(Meshes) < v"0.57"
     error("""

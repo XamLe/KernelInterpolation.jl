@@ -25,14 +25,14 @@ WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 [weakdeps]
 FastGaussQuadrature = "442a2c76-b920-505d-bb47-c5924d526838"
 Meshes = "eacbb407-ea5a-433e-ab97-5258b1ca43fa"
-IntegrationInterface = "03ca86a4-b7cd-4b10-a38f-d7a84f40de1e"
 
 [extensions]
-KernelInterpolationCellAverageExt = ["Meshes", "FastGaussQuadrature", "IntegrationInterface"]
+KernelInterpolationCellAverageExt = ["Meshes", "FastGaussQuadrature"]
 KernelInterpolationMeshesExt = "Meshes"
 
 [compat]
 DiffEqCallbacks = "4"
+FastGaussQuadrature = "1"
 ForwardDiff = "0.10.36, 1"
 LinearAlgebra = "1"
 Meshes = "0.52.1, 0.53, 0.54, 0.55, 0.56, 0.57"
