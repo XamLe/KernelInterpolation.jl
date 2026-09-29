@@ -34,14 +34,7 @@ Pages = ["basis.jl"]
 
 ```@autodocs
 Modules = [KernelInterpolation]
-Pages = ["interpolation.jl"]
-```
-
-## Cell-average interpolation
-
-```@autodocs
-Modules = [KernelInterpolation]
-Pages = ["cell_average_operators.jl", "cell_average_interpolation.jl"]
+Pages = ["/interpolation.jl"]
 ```
 
 ## Regularization
@@ -63,6 +56,13 @@ Pages = ["differential_operators.jl"]
 ```@autodocs
 Modules = [KernelInterpolation]
 Pages = ["equations.jl"]
+```
+
+## Cell-average interpolation
+
+```@autodocs
+Modules = [KernelInterpolation]
+Pages = ["cell_average_operators.jl", "cell_average_interpolation.jl"]
 ```
 
 ## Discretization
