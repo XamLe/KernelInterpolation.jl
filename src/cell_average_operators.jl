@@ -7,7 +7,7 @@ The functional is defined as:
     λ(f) = (1/|V|) ∫_V f(x) dx
 
 where V is any parametrized geometry from Meshes.jl and |V| is its volume measure.
-Integration is performed via `Meshes.integral` (h-adaptive cubature).
+Integration is performed via `Meshes.integral` (default: h-adaptive cubature).
 
 This functionality is provided by the KernelInterpolationCellAverageExt extension and
 requires Meshes.jl to be loaded.
@@ -104,6 +104,6 @@ function diameter end
 Return a [`NodeSet`](@ref) containing the centroids of all control volumes in
 `functionals`. Requires Meshes.jl.
 
-See also [`separation_distance`](@ref), [`maximum_cell_diameter`](@ref).
+See also [`separation_distance`](@ref), [`diameter`](@ref).
 """
 function centroid_nodeset end
