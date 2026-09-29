@@ -51,6 +51,13 @@ to be axis-aligned boxes (`Meshes.Segment`, `Meshes.Quadrangle`, `Meshes.Hexahed
 The element type `RealT` of the returned matrix is inferred from the `RealT` parameter of
 the `CellAverageFunctional`s. Requires Meshes.jl.
 
+Requires a strictly positive definite kernel, i.e. `order(kernel) == 0` (e.g. `GaussKernel`,
+`WendlandKernel`, `MaternKernel`, `InverseMultiquadricKernel`, `RadialCharacteristicKernel`),
+and errors otherwise. Cell-average functionals do not annihilate polynomials, so
+conditionally positive definite kernels (`order(kernel) > 0`, e.g. `MultiquadricKernel`,
+`ThinPlateSplineKernel`, `PolyharmonicSplineKernel`) would need polynomial augmentation to
+give a well-posed (positive definite) system; this is not yet supported.
+
 See also [`cell_average_interpolate`](@ref), [`expand`](@ref).
 """
 function assemble_cell_average_matrix end

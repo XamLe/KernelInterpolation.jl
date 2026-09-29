@@ -51,6 +51,22 @@ function KernelInterpolation.assemble_cell_average_matrix(
         functionals::AbstractVector{<:KernelInterpolation.CellAverageFunctional{Dim, RealT}},
         kernel::KernelInterpolation.AbstractKernel;
         n_gl::Union{Int, Nothing} = nothing) where {Dim, RealT}
+    # Conditionally positive definite kernels (order(kernel) > 0) are only guaranteed to
+    # give a positive definite Gram matrix on functionals that annihilate polynomials of
+    # degree < order(kernel) (e.g. point evaluations combined with the moment constraints
+    # used by `interpolate`). Cell-average functionals λ_i(p) = (1/|V_i|)∫_{V_i} p(x)dx do
+    # not annihilate non-constant polynomials in general, so without polynomial
+    # augmentation (not implemented here) the assembled matrix can be indefinite or
+    # numerically singular for such kernels.
+    KernelInterpolation.order(kernel) == 0 ||
+        error("cell-average interpolation requires a strictly positive definite " *
+              "kernel (order(kernel) == 0); got $(typeof(kernel)) with order " *
+              "$(KernelInterpolation.order(kernel)). Cell-average functionals do " *
+              "not annihilate polynomials, so conditionally positive definite " *
+              "kernels require polynomial augmentation, which is not yet " *
+              "supported. Use a strictly positive definite kernel instead, e.g. " *
+              "GaussKernel, WendlandKernel, MaternKernel, " *
+              "InverseMultiquadricKernel, or RadialCharacteristicKernel.")
     n         = length(functionals)
     A         = Matrix{RealT}(undef, n, n)
     n_entries = n * (n + 1) ÷ 2
@@ -339,6 +355,16 @@ function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::In
     w = width_fraction * h
     M = 2N - 1
     M == 1 && return [Box(ntuple(_ -> a, dim), ntuple(_ -> b, dim))]
+    # Gap-free covering requires consecutive cells to touch or overlap, i.e. spacing
+    # s = (b-a-w)/(M-1) ≤ width w = width_fraction*h. Solving s ≤ w for width_fraction
+    # gives width_fraction ≥ N/(2N-1), which is > 1/2 for every finite N (it only
+    # approaches 1/2 as N → ∞), so the naive "width_fraction ∈ (1/2, 1)" range is
+    # insufficient for small N and must be checked explicitly here.
+    width_fraction >= N / (2N - 1) ||
+        error("overlapping_cells: width_fraction = $width_fraction is too small " *
+              "for N = $N — cells would have gaps. Requires width_fraction >= " *
+              "$(N / (2N - 1)) for this N (approaches 1/2 only as N → ∞); the " *
+              "default 3/4 is safe for all N ≥ 2.")
     s      = (b - a - w) / (M - 1)
     starts = [a + k * s for k in 0:(M - 1)]
     return vec([Box(ntuple(d -> starts[I[d]], dim),
@@ -380,17 +406,21 @@ end
 
 # ── Visualization helpers ─────────────────────────────────────────────────────
 
+# Plain (unitless) min/max coordinates of a cell's axis-aligned bounding box, used to lay
+# out the plot recipes below without carrying Unitful quantities through plotting code.
 function _bounds(func::KernelInterpolation.CellAverageFunctional)
     bb = boundingbox(func.volume)
     return _to_coords(minimum(bb)), _to_coords(maximum(bb))
 end
 
+# Overall plotting extent (x-axis only) spanning all control volumes.
 function _domain_1d(funcs)
     lo = minimum(_bounds(func)[1][1] for func in funcs)
     hi = maximum(_bounds(func)[2][1] for func in funcs)
     return lo, hi
 end
 
+# Overall plotting extent (x- and y-axis) spanning all control volumes.
 function _domain_2d(funcs)
     lo_x = minimum(_bounds(func)[1][1] for func in funcs)
     hi_x = maximum(_bounds(func)[2][1] for func in funcs)
@@ -399,6 +429,9 @@ function _domain_2d(funcs)
     return lo_x, hi_x, lo_y, hi_y
 end
 
+# Build a piecewise-constant (step) x/y series for `vals` (e.g. cell averages), one
+# horizontal segment per 1D cell spanning its bounding box; NaN breaks keep Plots.jl from
+# connecting consecutive (possibly non-adjacent, e.g. overlapping_cells) segments.
 function _step_xy_1d(funcs, vals)
     xs = Float64[]
     ys = Float64[]
@@ -427,6 +460,7 @@ end
 
 # ── Plot recipes ──────────────────────────────────────────────────────────────
 
+# 1D: step plot of the input cell averages alongside the continuous interpolant s(x).
 @recipe function f(itp::KernelInterpolation.CellAverageInterpolation{1};
                    x_min = nothing, x_max = nothing, N = 200)
     funcs  = KernelInterpolation.functionals(itp)
@@ -450,6 +484,8 @@ end
     end
 end
 
+# 1D: as above, plus the target function f(x) the cell averages were computed from, for
+# visually comparing s(x) against the function it approximates.
 @recipe function f(itp::KernelInterpolation.CellAverageInterpolation{1},
                    target::Function;
                    x_min = nothing, x_max = nothing, N = 200)
@@ -478,6 +514,7 @@ end
     end
 end
 
+# 2D: heatmap of the continuous interpolant s(x,y) alone.
 @recipe function f(itp::KernelInterpolation.CellAverageInterpolation{2};
                    x_min = nothing, x_max = nothing,
                    y_min = nothing, y_max = nothing, N = 50)
@@ -494,6 +531,9 @@ end
     x, y, [itp([xv, yv]) for yv in y, xv in x]
 end
 
+# 2D: heatmap of the piecewise-constant cell averages (via _rasterize_2d) overlaid with
+# contour plots of both the continuous interpolant s(x,y) and the target function f(x,y),
+# for visually comparing all three.
 @recipe function f(itp::KernelInterpolation.CellAverageInterpolation{2},
                    target::Function;
                    x_min = nothing, x_max = nothing,
@@ -518,6 +558,15 @@ end
         seriestype := :contour
         label      --> "interpolant s(x,y)"
         colorbar   --> false
+        linewidth  --> 2
+        x, y, z
+    end
+    @series begin
+        z          = [target([xv, yv]) for yv in y, xv in x]
+        seriestype := :contour
+        label      --> "target f(x,y)"
+        colorbar   --> false
+        linestyle  --> :dash
         linewidth  --> 2
         x, y, z
     end

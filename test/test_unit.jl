@@ -1826,6 +1826,17 @@ end
                                                              n_gl = 4)
     itp_tri = cell_average_interpolate(functionals_tri, [1.0, 2.0], kernel2)
     @test_throws ErrorException expand(itp_tri, 4)
+
+    # Negative path: conditionally positive definite kernels (order(kernel) > 0) are
+    # rejected, since cell-average functionals do not annihilate polynomials and no
+    # polynomial augmentation is implemented (would otherwise silently give an indefinite
+    # system — see assemble_cell_average_matrix's docstring).
+    @test order(GaussKernel{1}()) == 0
+    @test order(MultiquadricKernel{1}()) > 0
+    @test_throws ErrorException assemble_cell_average_matrix(functionals,
+                                                             MultiquadricKernel{1}())
+    @test_throws ErrorException cell_average_interpolate(functionals, values,
+                                                         MultiquadricKernel{1}())
 end
 
 @testitem "CellAverageInterpolation BigFloat" setup=[Setup, AdditionalImports] begin
@@ -1871,6 +1882,13 @@ end
     @test length(overlapping_cells(5; dim = 1)) == 9
     @test eltype(overlapping_cells(5; dim = 1)) <: Box
     @test length(overlapping_cells(3; dim = 2)) == 25
+
+    # overlapping_cells: width_fraction must be at least N/(2N-1) to avoid gaps; the
+    # default (3/4) is safe for all N >= 2, but a smaller width_fraction can leave gaps
+    # for small N and must be rejected.
+    @test_throws ErrorException overlapping_cells(2; width_fraction = 0.55)
+    @test_nowarn overlapping_cells(2; width_fraction = 0.7)
+    @test_nowarn overlapping_cells(2)
 
     # triangular_cells: 2N^2 triangles partitioning [a,b]^2.
     tris = triangular_cells(4)

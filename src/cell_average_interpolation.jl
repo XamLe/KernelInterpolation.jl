@@ -91,8 +91,17 @@ Requires Meshes.jl. `n_gl`, if given, is forwarded to [`assemble_cell_average_ma
 to use Gauss-Legendre assembly instead of the default h-adaptive assembly. If
 `system_matrix` is provided it is used as the Gram matrix directly and assembly is skipped
 — the caller is responsible for ensuring it was assembled with the same `functionals` in the
-same order. If `linsolve` is provided it is passed to LinearSolve.jl; otherwise the
-backslash operator is used.
+same order (and, if using a conditionally positive definite kernel, that `system_matrix` was
+augmented appropriately, since [`assemble_cell_average_matrix`](@ref) itself does not do so).
+If `linsolve` is provided it is passed to LinearSolve.jl; otherwise the backslash operator is
+used.
+
+!!! warning "Requires a strictly positive definite kernel"
+    Unless `system_matrix` is supplied directly, this requires `order(kernel) == 0` (e.g.
+    `GaussKernel`, `WendlandKernel`, `MaternKernel`, `InverseMultiquadricKernel`,
+    `RadialCharacteristicKernel`) and errors otherwise — see
+    [`assemble_cell_average_matrix`](@ref) for why conditionally positive definite kernels
+    are not yet supported.
 
 !!! warning "Non-Float64 precision (e.g. BigFloat)"
     Evaluating the returned [`CellAverageInterpolation`](@ref) directly (calling `itp(x)`)
@@ -109,8 +118,11 @@ function cell_average_interpolate end
 """
     cell_averages(itp::CellAverageInterpolation)
 
-Numerically compute the cell averages ``\\lambda_i(s)`` of the interpolant `itp`
-over each of its control volumes. Requires Meshes.jl.
+Compute the cell averages ``\\lambda_i(s)`` of the interpolant `itp` over each of its
+control volumes as `system_matrix(itp) * coefficients(itp)`. Since this reuses the same
+(possibly quadrature-approximate) matrix that was solved to obtain the coefficients, it
+verifies that the linear solve was self-consistent (``Ac \\approx \\bar{f}``), not that the
+underlying quadrature accurately approximated the true functionals. Requires Meshes.jl.
 """
 function cell_averages end
 
@@ -185,7 +197,9 @@ Return a `Vector` of `(2N-1)^dim` boxes of uniform width `w = width_fraction*(b-
 placed with uniform spacing `s = (b-a-w)/(2N-2)` along each axis so that `[a,b]^dim` is
 fully covered.  Every interior cell has an exclusive region of width `2s - w > 0`, which
 improves kernel matrix conditioning over a single uniform tiling.  Requires
-`width_fraction ∈ (1/2, 1)`. Requires Meshes.jl.
+`width_fraction ≥ N/(2N-1)` (errors otherwise); this exact bound is strictly greater than
+`1/2` for every finite `N` and only approaches `1/2` as `N → ∞`. The default `3/4` is safe
+for all `N ≥ 2`. Requires Meshes.jl.
 
 # Example
 ```julia
