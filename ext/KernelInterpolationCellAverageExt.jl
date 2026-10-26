@@ -16,6 +16,11 @@ end
 
 using KernelInterpolation: KernelInterpolation
 
+# Closed-form rectangle integrals of Wendland kernel polynomials (k in 0:3, d=2), used
+# below by _cell_integral's WendlandKernel/Box fast path. Auto-generated; see the file's
+# own header for provenance and the companion derivation/validation notebook.
+include("wendland_rectangle_integral.jl")
+
 # Meshes stores coordinates as Unitful quantities; strip units to get plain Float64 SVectors.
 function _to_coords(p::Point)
     return ustrip.(to(p))
@@ -133,11 +138,46 @@ end
 
 # ── Interpolant evaluation ────────────────────────────────────────────────────
 
+# ∫_{volume} kernel(x,y) dy, h-adaptive numeric path. Given its own name (rather than
+# inlined into _cell_integral's default method) so the fast path below can fall back to
+# it explicitly -- calling _cell_integral itself recursively from inside a method that's
+# already the most specific match for (kernel,x,volume)'s runtime types would just
+# re-select that same method again (a type assertion on the argument in the call doesn't
+# change dispatch, which goes by the value's actual type), not "fall through" to this one.
+function _cell_integral_numeric(kernel, x::AbstractVector, volume::Meshes.Geometry)
+    return ustrip(integral(q -> kernel(x, _to_coords(q)), volume))
+end
+
+# Default: always the numeric path, used for any kernel/geometry combination without a
+# closed form below -- unaffected by anything in this section, same behavior as before.
+_cell_integral(kernel, x::AbstractVector, volume::Meshes.Geometry) =
+    _cell_integral_numeric(kernel, x, volume)
+
+# Fast path: WendlandKernel{2,Float64} (dispatching on RealT too, not just Dim, matters:
+# the generated rectangle-integral functions embed Float64-precision coefficients, so
+# using them for a BigFloat computation would silently truncate it back to ~16 digits of
+# real accuracy -- constraining x to AbstractVector{Float64} as well keeps both sides of
+# a mixed-precision call from slipping through) on an axis-aligned Box cell, for the
+# (k,d) combinations wendland_rectangle_integral.jl covers (currently k in 0:3, d=2).
+# Falls back to the numeric path above -- silently, via the `=== nothing` check -- for a
+# 3D Box, non-2D kernel.d, or any other (k,d) not yet derived.
+function _cell_integral(kernel::KernelInterpolation.WendlandKernel{2, Float64},
+                         x::AbstractVector{Float64}, volume::Meshes.Box)
+    Meshes.embeddim(volume) == 2 || return _cell_integral_numeric(kernel, x, volume)
+    mn, mx = _cell_bounds(volume, Float64)
+    eps = kernel.shape_parameter
+    a1, b1 = eps * (mn[1] - x[1]), eps * (mx[1] - x[1])
+    a2, b2 = eps * (mn[2] - x[2]), eps * (mx[2] - x[2])
+    v = _wendland_rectangle_integral(kernel.k, kernel.d, a1, b1, a2, b2)
+    v === nothing && return _cell_integral_numeric(kernel, x, volume)
+    return v / eps^2
+end
+
 # s(x) = Σⱼ cⱼ ψⱼ(x)  where  ψⱼ(x) = (1/|Ωⱼ|) ∫_{Ωⱼ} K(x,y) dy.
 function (itp::KernelInterpolation.CellAverageInterpolation)(x::AbstractVector)
     use_threads = !(eltype(itp.c) <: BigFloat)
     contribution(j) = itp.c[j] *
-        ustrip(integral(q -> itp.kernel(x, _to_coords(q)), itp.functionals[j].volume)) /
+        _cell_integral(itp.kernel, x, itp.functionals[j].volume) /
         itp.functionals[j].volume_measure
     contributions = similar(itp.c)
     if use_threads
