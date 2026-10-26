@@ -347,8 +347,8 @@ end
 
 # Return (2N-1)^dim boxes of uniform width w = width_fraction*(b-a)/N with uniform
 # spacing s = (b-a-w)/(2N-2), covering [a,b]^dim without gaps.  Every interior cell has
-# an exclusive region of width 2s-w > 0, which improves kernel matrix conditioning over a
-# pure tiling.  Requires width_fraction ∈ (1/2, 1); default 3/4.
+# an exclusive region of width 2s-w > 0
+# Requires width_fraction ∈ (1/2, 1); default 3/4.
 function KernelInterpolation.overlapping_cells(N::Int; a = 0.0, b = 1.0, dim::Int = 1,
                                                width_fraction = 3 // 4)
     h = (b - a) / N
