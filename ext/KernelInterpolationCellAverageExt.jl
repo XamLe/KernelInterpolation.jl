@@ -157,14 +157,25 @@ _cell_integral(kernel, x::AbstractVector, volume::Meshes.Geometry) =
 # the generated rectangle-integral functions embed Float64-precision coefficients, so
 # using them for a BigFloat computation would silently truncate it back to ~16 digits of
 # real accuracy -- constraining x to AbstractVector{Float64} as well keeps both sides of
-# a mixed-precision call from slipping through) on an axis-aligned Box cell, for the
-# (k,d) combinations wendland_rectangle_integral.jl covers (currently k in 0:3, d=2).
-# Falls back to the numeric path above -- silently, via the `=== nothing` check -- for a
-# 3D Box, non-2D kernel.d, or any other (k,d) not yet derived.
+# a mixed-precision call from slipping through) on a box-like cell, for the (k,d)
+# combinations wendland_rectangle_integral.jl covers (currently k in 0:3, d=2).
+#
+# "Box-like" uses the same _is_box_like predicate as GL assembly/expand below, not just
+# volume isa Meshes.Box: RegularGrid's elements() -- what regular_cells (the common case)
+# actually produces -- are Quadrangle, not Box, even though they're axis-aligned
+# rectangles by construction. _cell_bounds already handles this (falls back to
+# boundingbox(geom) for anything that isn't a Box), so the only change needed is not
+# excluding Quadrangle at the dispatch level. This is a value-level check, not a type-
+# level one -- a Quadrangle isn't guaranteed axis-aligned in general, but this package
+# only ever constructs them that way (same trust boundary _is_box_like already relies on
+# for GL assembly/expand, not a new assumption introduced here).
+#
+# Falls back to the numeric path above -- silently -- for a non-box-like geometry, a 3D
+# cell, or any (k,d) not yet derived.
 function _cell_integral(kernel::KernelInterpolation.WendlandKernel{2, Float64},
-                         x::AbstractVector{Float64}, volume::Meshes.Box)
-    @info "Using analytic closed form evaluation for Wendland kernel."
-    Meshes.embeddim(volume) == 2 || return _cell_integral_numeric(kernel, x, volume)
+                         x::AbstractVector{Float64}, volume::Meshes.Geometry)
+    _is_box_like(volume) && Meshes.embeddim(volume) == 2 ||
+        return _cell_integral_numeric(kernel, x, volume)
     mn, mx = _cell_bounds(volume, Float64)
     eps = kernel.shape_parameter
     a1, b1 = eps * (mn[1] - x[1]), eps * (mx[1] - x[1])
