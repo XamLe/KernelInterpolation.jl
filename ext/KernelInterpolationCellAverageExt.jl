@@ -163,6 +163,7 @@ _cell_integral(kernel, x::AbstractVector, volume::Meshes.Geometry) =
 # 3D Box, non-2D kernel.d, or any other (k,d) not yet derived.
 function _cell_integral(kernel::KernelInterpolation.WendlandKernel{2, Float64},
                          x::AbstractVector{Float64}, volume::Meshes.Box)
+    @info "Using analytic closed form evaluation for Wendland kernel."
     Meshes.embeddim(volume) == 2 || return _cell_integral_numeric(kernel, x, volume)
     mn, mx = _cell_bounds(volume, Float64)
     eps = kernel.shape_parameter
