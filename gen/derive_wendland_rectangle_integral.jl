@@ -143,6 +143,17 @@ for k in 0:3
     println(out, "    return $gbody")
     println(out, "end")
     println(out)
+
+    phi_name = "_wendland_phi_k$(k)"
+    phi_body = body_source(wendland_phi(k, 2), [r])
+    println(out, "# phi_{$(k),2}(r) itself, clipped at r=1 -- used only for the monotonicity-based")
+    println(out, "# sanity bound in the dispatcher below. Plain polynomial, no cancellation risk.")
+    println(out, "function $phi_name(rv)")
+    println(out, "    rv >= 1 && return 0.0")
+    println(out, "    r = rv")
+    println(out, "    return $phi_body")
+    println(out, "end")
+    println(out)
 end
 
 println(out, """
@@ -227,6 +238,29 @@ function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
     else
         return nothing
     end
+    # Monotonicity-based correctness check, not a tolerance: phi is nonincreasing on [0,1],
+    # so the true integral is sandwiched between phi(r_max)*Area and phi(r_min)*Area, where
+    # r_min/r_max are the distances from the origin to the rectangle's near/far corners --
+    # cheap to compute and always reliable, unlike any ratio-based threshold on a1/a2/b1/b2.
+    # The near-axis/boundary branches above all funnel through the SAME shared trig/log
+    # antiderivative machinery (max_side_ in the derivation), whose catastrophic-cancellation
+    # danger zone was empirically found to be wide, k-dependent, AND chaotic/non-monotonic in
+    # the input ratios (successive, more thorough sweeps kept finding worse cases -- see the
+    # notebook), so no fixed tolerance can be trusted to bound it. This check instead directly
+    # verifies the computed value is physically possible; if it isn't, the formula has clearly
+    # suffered cancellation and we fall back to exact adaptive quadrature for this one piece
+    # (cheap: it's rare in practice, and correctness never depends on guessing the danger zone
+    # right). Confirmed on real failures: catches results wrong by 4-5 orders of magnitude
+    # while leaving ordinarily-imprecise (but bounded) results untouched.
+    phifun = k == 0 ? _wendland_phi_k0 : k == 1 ? _wendland_phi_k1 :
+             k == 2 ? _wendland_phi_k2 : _wendland_phi_k3
+    r_min = sqrt(a1v^2 + a2v^2)
+    r_max = sqrt(b1v^2 + b2v^2)
+    area = (b1v - a1v) * (b2v - a2v)
+    hi = phifun(min(r_min, 1.0)) * area
+    lo = phifun(min(r_max, 1.0)) * area
+    slop = 1e-9 * max(1.0, hi)
+    (raw < lo - slop || raw > hi + slop) && return nothing
     # phi >= 0 on its support, so the integral is provably nonnegative; clamp away
     # occasional tiny negative floating-point artifacts right at r=1.
     return max(raw, 0.0)
