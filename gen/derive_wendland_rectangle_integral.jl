@@ -146,15 +146,30 @@ for k in 0:3
 end
 
 println(out, """
-# How close a1/a2 can get to 0 (relative to b2/b1 respectively) before the near-axis
-# antiderivative evaluation shared by every branch suffers catastrophic cancellation.
-# Used two ways below: a1 (resp. a2) near 0 relative to b2 (resp. b1) routes to the
-# boundary branches (with their linear Taylor correction); b1 (resp. b2) near 0 relative
-# to b2 (resp. b1) -- i.e. the *whole* x- or y-extent of the rectangle collapsing toward
-# the axis, not just one edge -- hits the same cancellation inside max_side (shared by
-# every branch, including the boundary ones), handled separately just below since it
-# isn't fixed by picking a different branch. See the derivation notebook for both.
-const _WENDLAND_NEAR_AXIS_TOL = $(NEAR_AXIS_TOL)
+# How close a1/a2 (and b1/b2, for the whole-rectangle guard below) can get to 0 relative
+# to the opposite edge before the near-axis antiderivative evaluation shared by every
+# branch suffers catastrophic cancellation -- k-dependent, and NOT a small effect: a
+# dense sweep (4000 log-spaced ratio samples per k, per Phi_i; Phi1/Phi2/Phi3/Phi4 all
+# gave identical worst ratios per k, as expected by the a<->b / sin<->cos symmetry of the
+# derivation) found the largest *broken* ratio at k=0: ~1e-8, k=1: ~0.0029, k=2: ~0.0145,
+# k=3: ~0.0634 -- i.e. the danger zone widens sharply with k (higher-degree polynomial,
+# more terms in the cancelling denominator). A single tol=0.01 (safe for k<=1) silently
+# produced Inf/NaN for k=2 in real use (every grid resolution of a convergence study,
+# not just a contrived case) before this was caught -- see the derivation notebook for
+# the full sweep and the incident that found it.
+#
+# The margin is deliberately NOT generous (~2-2.4x over the swept worst case, not 5x):
+# tol does double duty -- it's also the boundary of the Taylor-corrected approximation
+# (O(tol^2) error, growing with how far into the zone a given a1/a2 actually is), so a
+# wider-than-needed tol doesn't just "waste" some safety margin, it actively degrades
+# accuracy for ordinary, non-dangerous inputs that get needlessly routed through the
+# approximation instead of the (exact, ~1e-9) generic formula. Confirmed concretely: an
+# earlier 5x-margin tol=0.35 for k=3 caused a plain "inside" case, (0.1,0.5,0.2,0.6),
+# nowhere near any axis, to pick up a 3.3e-4 error it shouldn't have had at all -- not
+# itself unsafe, just needlessly imprecise. k=0/k=1 are left at their original,
+# already-validated 0.01 (>=3.4x margin, zero observed failures) rather than narrowed
+# further, since there's no accuracy problem there to fix.
+const _WENDLAND_NEAR_AXIS_TOL = (0.01, 0.01, 0.03, 0.15)  # indexed by k+1 (k=0:3)
 
 # Dispatches on k (and d=2, the only supported ambient/kernel dimension combination for
 # this fast path); each branch calls a separately-compiled, individually type-stable
@@ -164,19 +179,20 @@ function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
     d == 2 && k in 0:3 || return nothing
     gfun = k == 0 ? _wendland_Gclip_k0 : k == 1 ? _wendland_Gclip_k1 :
            k == 2 ? _wendland_Gclip_k2 : _wendland_Gclip_k3
+    tol = _WENDLAND_NEAR_AXIS_TOL[k + 1]
     # Whole-rectangle-near-an-axis guard: if b1 << b2 (so 0 <= a1 < b1 forces the entire
     # x-range close to 0 too, not just a1), phi(sqrt(x^2+y^2)) ~ phi(y) + O(x^2) throughout
     # the strip (the O(x) term vanishes by symmetry), so this is exact to O(b1^3), not just
     # a fallback -- confirmed numerically to agree with the true integral to machine
     # precision for a representative near-degenerate case. No singular angle evaluated at
     # all, so no cancellation risk regardless of how small b1 is. Symmetric for b2 << b1.
-    if b1v < _WENDLAND_NEAR_AXIS_TOL * b2v
+    if b1v < tol * b2v
         return max((b1v - a1v) * (gfun(b2v) - gfun(a2v)), 0.0)
-    elseif b2v < _WENDLAND_NEAR_AXIS_TOL * b1v
+    elseif b2v < tol * b1v
         return max((b2v - a2v) * (gfun(b1v) - gfun(a1v)), 0.0)
     end
-    a1_tiny = a1v < _WENDLAND_NEAR_AXIS_TOL * b2v
-    a2_tiny = a2v < _WENDLAND_NEAR_AXIS_TOL * b1v
+    a1_tiny = a1v < tol * b2v
+    a2_tiny = a2v < tol * b1v
     raw = if k == 0
         a1_tiny && a2_tiny ? _wendland_rect_both_0_k0(a1v, b1v, a2v, b2v) :
         a1_tiny            ? _wendland_rect_a1_0_k0(a1v, b1v, a2v, b2v) :
