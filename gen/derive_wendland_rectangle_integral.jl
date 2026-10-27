@@ -13,6 +13,44 @@ using SymPy
 
 const NEAR_AXIS_TOL = 0.01
 
+# SymPy's `integrate(1/sin(theta)^n, theta)` is flatly WRONG for odd n (verified: off by
+# factors of 1e3-1e10 for n=7,9, confirmed not a precision artifact by checking at exact
+# rational theta/b2 values across 40+ digits of precision -- the derivative of its own
+# "antiderivative" does not match the integrand, so it isn't a branch-cut/simplification
+# quirk, it's a wrong closed form). `integrate(1/cos(theta)^n, theta)` is fine for all n
+# tested. This silently corrupted Phi2/Phi3 (which integrate b2/sin(theta), a2/sin(theta))
+# while leaving Phi1/Phi4 (cos-based) correct -- explaining why only the a2-related/b2-
+# related near-r=1 boundary cases were ever wrong. Root-caused by differentiating each
+# candidate antiderivative and comparing to the integrand at exact rational points (ruling
+# out floating-point noise); fixed via the standard, hand-verified csc^n reduction formula
+# instead of trusting `integrate` on these terms.
+function csc_integral(n::Int)
+    if n == 0
+        return theta
+    elseif n == 1
+        return log(sin(theta / 2)) - log(cos(theta / 2))
+    elseif n == 2
+        return -cos(theta) / sin(theta)
+    else
+        return -cos(theta) / ((n - 1) * sin(theta)^(n - 1)) + Sym(n - 2) // (n - 1) * csc_integral(n - 2)
+    end
+end
+
+# Integrates an expression that is a polynomial in 1/sin(theta) (other symbols as
+# coefficients) by extracting each power of csc(theta) and replacing it with the verified
+# reduction-formula antiderivative above, term by term -- bypassing SymPy's `integrate`
+# entirely for this family, since it cannot be trusted on it (see note above).
+function integrate_csc_poly(expr, thetasym)
+    @syms __csc_s::(real, positive)
+    expr_in_s = subs(expand(expr), 1 / sin(thetasym), __csc_s)
+    p = sympy.Poly(expr_in_s, __csc_s)
+    result = Sym(0)
+    for (monom, coeff) in zip(p.monoms(), p.coeffs())
+        result += coeff * csc_integral(Int(monom[1]))
+    end
+    return result
+end
+
 # phi_{k,d=2}(r), matching KernelInterpolation.jl's phi(::WendlandKernel, r) exactly.
 function wendland_phi(k::Int, d::Int)
     l = fld(d, 2) + k + 1
@@ -48,8 +86,8 @@ function derive_branches(phi_expr)
         return ex
     end
     Phi1_ = realify_(integrate(Hf_(b1 / cos(theta)), theta))
-    Phi2_ = realify_(integrate(Hf_(b2 / sin(theta)), theta))
-    Phi3_ = realify_(integrate(Hf_(a2 / sin(theta)), theta))
+    Phi2_ = realify_(integrate_csc_poly(Hf_(b2 / sin(theta)), theta))
+    Phi3_ = realify_(integrate_csc_poly(Hf_(a2 / sin(theta)), theta))
     Phi4_ = realify_(integrate(Hf_(a1 / cos(theta)), theta))
     ev_(Phi, val) = subs(Phi, theta, val)
 
