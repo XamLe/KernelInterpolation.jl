@@ -212,9 +212,62 @@ function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
     elseif b2v < tol_rect * b1v
         return max((b2v - a2v) * (gfun(b1v) - gfun(a1v)), 0.0)
     end
+    raw = _wendland_rect_raw(k, a1v, b1v, a2v, b2v, tol)
+    raw === nothing && return nothing
+    # Sensitivity (condition-number) check, not a tolerance on the inputs: a well-conditioned
+    # evaluation of a smooth function changes by about as much as its input does. Perturbing
+    # every input by a tiny relative amount and recomputing is branch- and geometry-agnostic
+    # -- it directly measures whether THIS evaluation amplified rounding noise, instead of
+    # guessing (via a1/a2/b1/b2 ratio thresholds) where that might happen. This is what
+    # finally caught the a1_0-branch failure that both NEAR_AXIS_TOL and RECT_TOL above
+    # missed (a "generic"-branch case with a1=0.0284, b1=0.0784, a2=0.735, b2=0.785 -- outside
+    # both guards' thresholds, 28.6% wrong): confirmed directly that a 1e-13 relative
+    # perturbation to b1 alone swung that case's answer by ~25%, the signature of a function
+    # evaluation that has lost most of its significant digits internally -- no finite set of
+    # swept tolerances could be trusted to rule that out in advance (see the notebook for the
+    # full derivation of why: Phi1/Phi2's closed forms are mathematically correct, verified
+    # against their own integrands at 40+ digits of precision, but evaluating them in Float64
+    # requires summing several individually-huge terms that nearly cancel whenever the
+    # relevant angle lands close to 0 or pi/2 -- true, inherent ill-conditioning of the closed
+    # form itself in that regime, not a wrong formula and not fixable by finding a different
+    # algebraic form of it).
+    eps_rel = 1e-13
+    a1p = iszero(a1v) ? a1v : a1v * (1 + eps_rel)
+    b1p = b1v * (1 + eps_rel)
+    a2p = iszero(a2v) ? a2v : a2v * (1 + eps_rel)
+    b2p = b2v * (1 + eps_rel)
+    raw_perturbed = _wendland_rect_raw(k, a1p, b1p, a2p, b2p, tol)
+    raw_perturbed === nothing && return nothing
+    reldiff = abs(raw - raw_perturbed) / max(abs(raw), abs(raw_perturbed), 1e-300)
+    reldiff > 1e-6 && return nothing
+    # Monotonicity-based correctness check, not a tolerance: phi is nonincreasing on [0,1],
+    # so the true integral is sandwiched between phi(r_max)*Area and phi(r_min)*Area, where
+    # r_min/r_max are the distances from the origin to the rectangle's near/far corners --
+    # cheap, so kept as a first-line, zero-cost-on-the-common-path filter even though the
+    # sensitivity check above is strictly more general (it can be "accidentally" satisfied by
+    # a value that's wrong but stable under perturbation, in principle, even if never observed
+    # in practice; this bound adds a second, independent condition that must also hold).
+    phifun = k == 0 ? _wendland_phi_k0 : k == 1 ? _wendland_phi_k1 :
+             k == 2 ? _wendland_phi_k2 : _wendland_phi_k3
+    r_min = sqrt(a1v^2 + a2v^2)
+    r_max = sqrt(b1v^2 + b2v^2)
+    area = (b1v - a1v) * (b2v - a2v)
+    hi = phifun(min(r_min, 1.0)) * area
+    lo = phifun(min(r_max, 1.0)) * area
+    slop = 1e-9 * max(1.0, hi)
+    (raw < lo - slop || raw > hi + slop) && return nothing
+    # phi >= 0 on its support, so the integral is provably nonnegative; clamp away
+    # occasional tiny negative floating-point artifacts right at r=1.
+    return max(raw, 0.0)
+end
+
+# Raw (uncorrected) branch dispatch, factored out of _wendland_rect_first_quadrant so it can
+# be called twice: once on the real inputs, once on a tiny relative perturbation of them, for
+# the sensitivity check there.
+function _wendland_rect_raw(k::Int, a1v, b1v, a2v, b2v, tol)
     a1_tiny = a1v < tol * b2v
     a2_tiny = a2v < tol * b1v
-    raw = if k == 0
+    return if k == 0
         a1_tiny && a2_tiny ? _wendland_rect_both_0_k0(a1v, b1v, a2v, b2v) :
         a1_tiny            ? _wendland_rect_a1_0_k0(a1v, b1v, a2v, b2v) :
         a2_tiny            ? _wendland_rect_a2_0_k0(a1v, b1v, a2v, b2v) :
@@ -235,34 +288,8 @@ function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
         a2_tiny            ? _wendland_rect_a2_0_k3(a1v, b1v, a2v, b2v) :
                               _wendland_rect_generic_k3(a1v, b1v, a2v, b2v)
     else
-        return nothing
+        nothing
     end
-    # Monotonicity-based correctness check, not a tolerance: phi is nonincreasing on [0,1],
-    # so the true integral is sandwiched between phi(r_max)*Area and phi(r_min)*Area, where
-    # r_min/r_max are the distances from the origin to the rectangle's near/far corners --
-    # cheap to compute and always reliable, unlike any ratio-based threshold on a1/a2/b1/b2.
-    # The near-axis/boundary branches above all funnel through the SAME shared trig/log
-    # antiderivative machinery (max_side_ in the derivation), whose catastrophic-cancellation
-    # danger zone was empirically found to be wide, k-dependent, AND chaotic/non-monotonic in
-    # the input ratios (successive, more thorough sweeps kept finding worse cases -- see the
-    # notebook), so no fixed tolerance can be trusted to bound it. This check instead directly
-    # verifies the computed value is physically possible; if it isn't, the formula has clearly
-    # suffered cancellation and we fall back to exact adaptive quadrature for this one piece
-    # (cheap: it's rare in practice, and correctness never depends on guessing the danger zone
-    # right). Confirmed on real failures: catches results wrong by 4-5 orders of magnitude
-    # while leaving ordinarily-imprecise (but bounded) results untouched.
-    phifun = k == 0 ? _wendland_phi_k0 : k == 1 ? _wendland_phi_k1 :
-             k == 2 ? _wendland_phi_k2 : _wendland_phi_k3
-    r_min = sqrt(a1v^2 + a2v^2)
-    r_max = sqrt(b1v^2 + b2v^2)
-    area = (b1v - a1v) * (b2v - a2v)
-    hi = phifun(min(r_min, 1.0)) * area
-    lo = phifun(min(r_max, 1.0)) * area
-    slop = 1e-9 * max(1.0, hi)
-    (raw < lo - slop || raw > hi + slop) && return nothing
-    # phi >= 0 on its support, so the integral is provably nonnegative; clamp away
-    # occasional tiny negative floating-point artifacts right at r=1.
-    return max(raw, 0.0)
 end
 
 # Reduces an arbitrary rectangle (any quadrant, any straddling of the axes) to up to four
