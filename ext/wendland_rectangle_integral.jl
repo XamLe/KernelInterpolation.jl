@@ -136,6 +136,17 @@ const _WENDLAND_NEAR_AXIS_TOL = (0.01, 0.01, 0.03, 0.15)  # indexed by k+1 (k=0:
 # this dispatcher itself stays type-stable (every branch returns Float64).
 function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
     d == 2 && k in 0:3 || return nothing
+    # Exact short-circuit: (a1v, a2v) is always the rectangle's corner nearest the
+    # origin (every call site enforces a1v <= b1v, a2v <= b2v, both >= 0). If that
+    # corner is already on/outside the unit disk, phi(r) = 0 throughout the rectangle
+    # (support is r <= 1), so the true integral is exactly 0 -- not an approximation.
+    # Without this, rectangles far outside the support but straddling an axis after
+    # quadrant-splitting fall into the near-axis Taylor-correction branches below, whose
+    # inherent O(tol^2) residual doesn't know the answer is exactly zero; summed over the
+    # thousands of such "far" cells in a real evaluation, those residuals accumulate into
+    # a measurable, grid-resolution-dependent error (caught via comparison against the
+    # pre-fast-path h-adaptive baseline, which returns exact 0.0 for these cells).
+    a1v^2 + a2v^2 >= 1 && return 0.0
     gfun = k == 0 ? _wendland_Gclip_k0 : k == 1 ? _wendland_Gclip_k1 :
            k == 2 ? _wendland_Gclip_k2 : _wendland_Gclip_k3
     tol = _WENDLAND_NEAR_AXIS_TOL[k + 1]
