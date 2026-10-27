@@ -162,6 +162,24 @@ end
 # further, since there's no accuracy problem there to fix.
 const _WENDLAND_NEAR_AXIS_TOL = (0.01, 0.01, 0.03, 0.15)  # indexed by k+1 (k=0:3)
 
+# Separate, wider margin for the whole-rectangle Cartesian guard below, decoupled from
+# _WENDLAND_NEAR_AXIS_TOL above. Found via a real convergence-study failure: a cell with
+# b1/b2 = 0.0302 -- i.e. a hair past the _WENDLAND_NEAR_AXIS_TOL threshold used here before
+# -- fell through to the a1_0 branch, where max_side_'s Phi1 is evaluated across a theta
+# range landing right next to theta=pi/2 (b1 tiny, b2 not), suffering genuine Float64
+# cancellation (confirmed: the exact 40-digit symbolic value matches the true integral;
+# only the Float64 evaluation doesn't -- see the notebook). The Cartesian formula below is
+# safe here specifically because a1 < b1 forces a1 to be just as small as b1 whenever this
+# branch fires, which is NOT symmetric with the opposite "a1 fixed, b1 not" case the
+# NEAR_AXIS_TOL margin above has to stay conservative about -- but the Cartesian
+# approximation's own error still grows with the ratio (and with how large b2 itself is in
+# absolute terms, independent of the ratio), so this still isn't widened aggressively.
+# Confirmed via a 40000-trial random sweep per k that this margin comfortably covers the
+# found failures without picking up the Cartesian approximation's own growing error at
+# wider ratios; any remaining residual (chaotic, like NEAR_AXIS_TOL, impossible to fully
+# bound by sweeping) is caught by the monotonicity-based correctness check further below.
+const _WENDLAND_RECT_TOL = (0.02, 0.08, 0.08, 0.08)  # indexed by k+1 (k=0:3)
+
 # Dispatches on k (and d=2, the only supported ambient/kernel dimension combination for
 # this fast path); each branch calls a separately-compiled, individually type-stable
 # function, so despite k/d being runtime fields (not type parameters) on WendlandKernel,
@@ -188,9 +206,10 @@ function _wendland_rect_first_quadrant(k::Int, d::Int, a1v, b1v, a2v, b2v)
     # a fallback -- confirmed numerically to agree with the true integral to machine
     # precision for a representative near-degenerate case. No singular angle evaluated at
     # all, so no cancellation risk regardless of how small b1 is. Symmetric for b2 << b1.
-    if b1v < tol * b2v
+    tol_rect = _WENDLAND_RECT_TOL[k + 1]
+    if b1v < tol_rect * b2v
         return max((b1v - a1v) * (gfun(b2v) - gfun(a2v)), 0.0)
-    elseif b2v < tol * b1v
+    elseif b2v < tol_rect * b1v
         return max((b2v - a2v) * (gfun(b1v) - gfun(a1v)), 0.0)
     end
     a1_tiny = a1v < tol * b2v
